@@ -1,7 +1,8 @@
 #include<cmath>
-#include "opencv2/imgproc.hpp"
+#include "opencv2/opencv.hpp"
 #include "opencv2/opencv.hpp"
 #define DEG2RAD 0.017453293f
+
 class Hough{
     
     unsigned int* accu;
@@ -22,8 +23,8 @@ public:
 
     int hough_transform(unsigned char* img, int w, int h){
         img_h = h; img_w = w;
-        double hough_h = (std::sqrt(2.0)* (double)(h>w?h:w) / 2.0);
-        accu_h = hough_h * 2.0;
+        double hough_h = ((sqrt(2.0) * (double)(h>w?h:w)) / 2.0);  
+        accu_h = hough_h * 2.0; // -r -> +r 
         accu_w = 180;
 
         accu = (unsigned int*)calloc(accu_h*accu_w,sizeof(unsigned int)); 
@@ -109,14 +110,13 @@ int main(){
     cv::Mat img_edge;
 	cv::Mat img_blur;
 
-    cv::Mat img = cv::imread("sudoku.png", 1);
+    cv::Mat img = cv::imread("../pictures/sudoku.png", 1);
     if (!img.data){
         printf("No image data \n");
         return -1;
     }
-	// cv::blur( img, img_blur, cv::Size(5,5) );
 	cv::Canny(img, img_edge, 100, 150, 3);
-    cv::imshow("Edges", img_edge);
+    cv::imwrite("edges.jpg", img_edge);
 
     Hough h;
     h.hough_transform(img_edge.data, img_edge.cols, img_edge.rows);
@@ -127,8 +127,6 @@ int main(){
     for(it=lines.begin();it!=lines.end();it++){
         cv::line(img_res, cv::Point(it->first[0], it->first[1]), cv::Point(it->second[0], it->second[1]), cv::Scalar( 0, 0, 255), 2, 8);
     }
-
-    cv::imshow("result",img_res);
-    cv::waitKey(0);
+    cv::imwrite("result.jpg",img_res);
     return 0;
 }
