@@ -1,57 +1,62 @@
-#include<cmath>
+#include <cmath>
+#include <chrono>
 #include "opencv2/opencv.hpp"
-#include "opencv2/opencv.hpp"
-#define DEG2RAD 0.017453293f
+#include "opencv2/imgproc/imgproc.hpp"
+
+// precompute trigonometric values from 0 to angles_range
+void precompute_tryg(double * cosarr, double * sinarr, int angles_range){
+    for (int angle = 0; angle < angles_range; angle++){
+        cosarr[angle] = std::cos(angle * 0.017453293f);
+        sinarr[angle] = std::sin(angle * 0.017453293f);
+    }
+}
+
+// find local maximums in accuulator, write them to vector of lines if above threshold
+void find_maxims(int * accu, std::vector<std::pair<int,int>> & lines, int rho_range, int theta_range, int threshold, int offset){
+    for (int rho = 0; rho < rho_range; ++rho) {
+        int r = rho-offset;
+        for (int theta = 0; theta < theta_range; ++theta){
+            if (accu[rho*theta_range + theta] > threshold){
+                int current_ind = rho * (theta_range) + theta;
+                if( accu[current_ind] > threshold &&
+                    accu[current_ind] > accu[current_ind - 1] && accu[current_ind] >= accu[current_ind + 1] &&
+                    accu[current_ind] > accu[current_ind - theta_range ] && accu[current_ind] >= accu[current_ind + theta_range])
+                    lines.push_back(std::make_pair(r,theta));
+            }
+        }
+    }	
+}
 
 
 std::vector<std::pair<int,int>> hough_transform(unsigned char* edges, int w, int h, int threshold){
-    //getting the width and height of accumulator;
-    double hough_h = sqrt(w*w+h*h);
-    int accu_h = hough_h*2; // (-r, r)
+    double diagonal = sqrt(w*w+h*h);
+    int accu_h = diagonal*2; // (-r, r)
     int accu_w = 180; 
-    std::vector<std::vector<int>>accu(accu_h, std::vector<int>(accu_w,0)); 
 
-    double center_x = w/2;
-    int maxa = -1;
-    double center_y = h/2;
-    for (double x = 0; x < w; x++){
-        for (double y = 0; y < h; y++){
-            if (edges[((int)y*(int)w)+(int)x] > 250){
-                for (int alpha = 0; alpha < 180; alpha++){
-                    double ang = (double)alpha * 0.017453293f;
-                    double r = x*cos(ang)+y*sin(ang);
-                    int ind =round(r + hough_h); // compute index of rho in accu
-                    accu[ind][alpha]++;
-                    if(accu[ind][alpha] > maxa)  
-                        maxa = accu[ind][alpha];  
+    double *cosvalues = new double[180];
+    double *sinvalues = new double[180];
+    int * accu = new int[accu_h*accu_w]();
+
+    precompute_tryg(cosvalues,sinvalues,180);
+
+    for (int y = 0; y < h; y++){
+        for (int x = 0; x < w; x++){
+            if (edges[(y*w)+x] != 0){
+                for (int theta = 0; theta < 180; theta++){
+                    int r =  (x*cosvalues[theta]+y*sinvalues[theta]) + diagonal;
+                    accu[r*accu_w+theta]++;
                 }
             }
         }
     }
-    cv::Mat img_accu(accu_h, accu_w, CV_8UC3);  
-    double coef = 255.0/maxa;
-    for (int y = 0; y < accu_h; y++){
-        for (int x = 0; x < accu_w; x++){  
-            int p = y*180+x;
-            unsigned char c = (double)accu[y][x] * coef < 255.0 ? (double)accu[y][x] * coef : 255.0;  
-            img_accu.data[(p*3)+0] = 255;  
-            img_accu.data[(p*3)+1] = 255-c;  
-            img_accu.data[(p*3)+2] = 255-c;  
-        }  
-    }
 
-    cv::imwrite("../accu.png", img_accu);
-    
-    // TODO: same line is detected multiple times, resulting in bad computing times
-    // make this loop check surroundings of index, before adding line to vector 
     std::vector<std::pair<int,int>> lines;
-    for (int rho = 0; rho < accu_h; ++rho) {
-        for (int theta = 0; theta < accu_w ; ++theta){
-            if ((int)(accu[rho][theta]) > threshold){
-                lines.push_back({rho-hough_h,theta}); // don't forget to calculate real rho!
-            }
-        }
-    }	
+    find_maxims(accu,lines,accu_h,accu_w,threshold,diagonal);
+
+    delete [] cosvalues;
+    delete [] sinvalues;
+    delete [] accu;
+
     return lines;   
 }
 
@@ -59,7 +64,7 @@ int main(){
     cv::Mat img_edge;
     cv::Mat img_dst;
     cv::Mat img_blur;
-    cv::Mat img = cv::imread("../pictures/fence.png", 1);
+    cv::Mat img = cv::imread("../pictures/house2.jpg", 1);
     if (!img.data){
         printf("No image data \n");
         return -1;
@@ -69,8 +74,15 @@ int main(){
 	cv::Canny(img_blur, img_edge, 100, 150, 3);
     cv::imwrite("edges.jpg", img_edge);
 
-    auto lines = hough_transform(img_edge.data, img_edge.cols, img_edge.rows, 190);
-    printf("Lines: %d", lines.size());
+    auto start = std::chrono::high_resolution_clock::now();
+    auto lines = hough_transform(img_edge.data, img_edge.cols, img_edge.rows, 350);
+    auto stop = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+    
+    printf("mine:\n");
+    printf("1. lines:  %d \n", lines.size());
+    printf("2. time:  %d \n", duration.count());
+    
     for (const auto& line : lines) {
         double theta = line.second * CV_PI / 180.0;
         double rho = line.first;
@@ -83,6 +95,32 @@ int main(){
         cv::line(img_dst, pt1, pt2, cv::Scalar(0, 0, 255), 2, cv::LINE_AA);
     } 
 
-    cv::imwrite("result.png",img_dst);
+    std::vector<cv::Vec2f> lines_cv;
+    
+    start = std::chrono::high_resolution_clock::now();
+    cv::HoughLines(img_edge, lines_cv, 1, CV_PI/180, 350, 0, 0);
+    stop = std::chrono::high_resolution_clock::now();
+    auto duration_cv = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+    
+    printf("cv:\n");
+    printf("1. lines:  %d \n", lines_cv.size());
+    printf("2. time:  %d \n", duration_cv.count());
+
+    cv::Mat img_dst2 = img.clone();
+    for( size_t i = 0; i < lines.size(); i++ )
+    {
+        float rho = lines_cv[i][0], theta = lines_cv[i][1];
+        cv::Point pt1, pt2;
+        double a = cos(theta), b = sin(theta);
+        double x0 = a*rho, y0 = b*rho;
+        pt1.x = cvRound(x0 + 1000*(-b));
+        pt1.y = cvRound(y0 + 1000*(a));
+        pt2.x = cvRound(x0 - 1000*(-b));
+        pt2.y = cvRound(y0 - 1000*(a));
+        line( img_dst2, pt1, pt2, cv::Scalar(0,0,255), 2, cv::LINE_AA);
+    }
+
+    cv::imwrite("../results/result_mine.png",img_dst);
+    cv::imwrite("../results/result_cv.png",img_dst2);
     return 0;
 }
