@@ -1,5 +1,6 @@
 #include <cmath>
 #include <chrono>
+#include <string>
 #include "opencv2/opencv.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
 
@@ -64,7 +65,11 @@ int main(){
     cv::Mat img_edge;
     cv::Mat img_dst;
     cv::Mat img_blur;
-    cv::Mat img = cv::imread("../pictures/house2.jpg", 1);
+    std::string filename;
+    std::cout << "Enter the name of the file: ";
+    std::cin >> filename;
+    std::string path = "../pictures/" + filename;
+    cv::Mat img = cv::imread(path, 1);
     if (!img.data){
         printf("No image data \n");
         return -1;
