@@ -3,56 +3,75 @@
 #include <string>
 #include "opencv2/opencv.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
+#include "omp.h"
+
+int compute_angle(double min_theta, double max_theta, double theta_step){
+    int numangle = cvFloor((max_theta - min_theta) / theta_step) + 1;
+    if ( numangle > 1 && fabs(CV_PI - (numangle-1)*theta_step) < theta_step/2 )
+        --numangle;
+    return numangle;
+}
 
 // precompute trigonometric values from 0 to angles_range
-void precompute_tryg(double * cosarr, double * sinarr, int angles_range){
-    for (int angle = 0; angle < angles_range; angle++){
-        cosarr[angle] = std::cos(angle * 0.017453293f);
-        sinarr[angle] = std::sin(angle * 0.017453293f);
+void precompute_tryg(double * cosarr, double * sinarr, int numangle, double min_theta, double theta_step, float irho){
+    float ang = min_theta;
+    for (int angle = 0; angle < numangle;ang+=(float)theta_step, angle++){
+        cosarr[angle] = std::cos(ang) *irho;
+        sinarr[angle] = std::sin(ang) *irho;
     }
 }
 
 // find local maximums in accuulator, write them to vector of lines if above threshold
-void find_maxims(int * accu, std::vector<std::pair<int,int>> & lines, int rho_range, int theta_range, int threshold, int offset){
-    for (int rho = 0; rho < rho_range; ++rho) {
-        int r = rho-offset;
-        for (int theta = 0; theta < theta_range; ++theta){
-            if (accu[rho*theta_range + theta] > threshold){
-                int current_ind = rho * (theta_range) + theta;
-                if( accu[current_ind] > threshold &&
-                    accu[current_ind] > accu[current_ind - 1] && accu[current_ind] >= accu[current_ind + 1] &&
-                    accu[current_ind] > accu[current_ind - theta_range ] && accu[current_ind] >= accu[current_ind + theta_range])
-                    lines.push_back(std::make_pair(r,theta));
+void find_maxims(int * accu, std::vector<std::pair<float,float>> & lines, int numrho, int numangle, int threshold, 
+                 double min_theta, float theta_step, float rho_step){
+    for (int r = 0; r < numrho; ++r) {
+        for (int theta = 0; theta < numangle; ++theta){
+            int current_ind = (theta+1)*(numrho+2)+r+1;
+            if( accu[current_ind] > threshold &&
+                accu[current_ind] > accu[current_ind - 1] && accu[current_ind] >= accu[current_ind + 1] &&
+                accu[current_ind] > accu[current_ind - numrho - 2 ] && accu[current_ind] >= accu[current_ind + numrho + 2] ){
+                float rho = (r - (numrho-1)*0.5f) * rho_step;
+                float angle = min_theta + theta * theta_step;
+                lines.push_back(std::pair<float,float>(rho,angle));
             }
-        }
-    }	
+        }	
+    }
 }
 
+std::vector<std::pair<float,float>> hough_transform(cv::Mat img, int threshold, float rho, float theta, double min_theta=0.0, double max_theta=CV_PI){
+    float irho = 1./rho;
+    
+    unsigned char *data = img.ptr();
+    int width = img.cols;
+    int height = img.rows;
 
-std::vector<std::pair<int,int>> hough_transform(unsigned char* edges, int w, int h, int threshold){
-    double diagonal = sqrt(w*w+h*h);
-    int accu_h = diagonal*2; // (-r, r)
-    int accu_w = 180; 
+    int max_rho = width+height;
+    int min_rho = -max_rho;
 
-    double *cosvalues = new double[180];
-    double *sinvalues = new double[180];
-    int * accu = new int[accu_h*accu_w]();
+    int numangle = compute_angle(min_theta, max_theta, theta);
+    int numrho = cvRound((max_rho - min_rho) * irho);
 
-    precompute_tryg(cosvalues,sinvalues,180);
+    int*accu = new int[(numangle+2)*(numrho+2)]{0};
 
-    for (int y = 0; y < h; y++){
-        for (int x = 0; x < w; x++){
-            if (edges[(y*w)+x] != 0){
-                for (int theta = 0; theta < 180; theta++){
-                    int r =  (x*cosvalues[theta]+y*sinvalues[theta]) + diagonal;
-                    accu[r*accu_w+theta]++;
+    double *cosvalues = new double[numangle];
+    double *sinvalues = new double[numangle];
+
+    precompute_tryg(cosvalues,sinvalues,numangle, min_theta, theta, irho);
+
+    for (int y = 0; y < height; y++){
+        for (int x = 0; x < width; x++){
+            if (data[(y*width)+x] != 0){
+                for (int angle = 0; angle < numangle; angle++){
+                    int r =  round(x*cosvalues[angle]+y*sinvalues[angle]);
+                    r += (numrho-1)/2;
+                    accu[(angle+1)*(numrho+2)+r+1]++;
                 }
             }
         }
     }
 
-    std::vector<std::pair<int,int>> lines;
-    find_maxims(accu,lines,accu_h,accu_w,threshold,diagonal);
+    std::vector<std::pair<float,float>> lines;
+    find_maxims(accu,lines,numrho,numangle,threshold,min_theta,theta,rho);
 
     delete [] cosvalues;
     delete [] sinvalues;
@@ -74,42 +93,46 @@ int main(){
         printf("No image data \n");
         return -1;
     }
+
+    int biggest = std::max(img.rows, img.cols);
+
     img_dst = img.clone();
     cv::blur(img, img_blur,cv::Size(5,5));
-	cv::Canny(img_blur, img_edge, 100, 150, 3);
-    cv::imwrite("edges.jpg", img_edge);
+	cv::Canny(img_blur, img_edge, 100, 200, 3);
+    cv::imwrite("../results/edges.jpg", img_edge);
 
-    auto start = std::chrono::high_resolution_clock::now();
-    auto lines = hough_transform(img_edge.data, img_edge.cols, img_edge.rows, 350);
-    auto stop = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+    cv::Mat img_edge_cv = img_edge.clone();
+    auto start = omp_get_wtime();
+    auto lines = hough_transform(img_edge,50, 1,CV_PI/180);
+    auto stop = omp_get_wtime();
+    auto duration = stop - start;
     
     printf("mine:\n");
-    printf("1. lines:  %d \n", lines.size());
-    printf("2. time:  %d \n", duration.count());
+    printf("1. lines:  %ld \n", lines.size());
+    printf("2. time:  %lf \n", duration);
     
+    std::vector<cv::Vec2f> lines_cv;
+    
+    start = omp_get_wtime();
+    cv::HoughLines(img_edge_cv, lines_cv, 50, CV_PI/180, 1, 0, 0);
+    stop = omp_get_wtime();
+    auto duration_cv = stop-start;
+
     for (const auto& line : lines) {
-        double theta = line.second * CV_PI / 180.0;
+        double theta = line.second;
         double rho = line.first;
         double a = std::cos(theta);
         double b = std::sin(theta);
         double x0 = a * rho;
         double y0 = b * rho;
-        cv::Point pt1(cvRound(x0 + 1000 * (-b)), cvRound(y0 + 1000 * (a)));
-        cv::Point pt2(cvRound(x0 - 1000 * (-b)), cvRound(y0 - 1000 * (a)));
+        cv::Point pt1(cvRound(x0 + biggest * (-b)), cvRound(y0 + biggest * (a)));
+        cv::Point pt2(cvRound(x0 - biggest * (-b)), cvRound(y0 - biggest * (a)));
         cv::line(img_dst, pt1, pt2, cv::Scalar(0, 0, 255), 2, cv::LINE_AA);
     } 
-
-    std::vector<cv::Vec2f> lines_cv;
-    
-    start = std::chrono::high_resolution_clock::now();
-    cv::HoughLines(img_edge, lines_cv, 1, CV_PI/180, 350, 0, 0);
-    stop = std::chrono::high_resolution_clock::now();
-    auto duration_cv = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
     
     printf("cv:\n");
-    printf("1. lines:  %d \n", lines_cv.size());
-    printf("2. time:  %d \n", duration_cv.count());
+    printf("1. lines:  %ld \n", lines_cv.size());
+    printf("2. time:  %lf \n", duration_cv);
 
     cv::Mat img_dst2 = img.clone();
     for( size_t i = 0; i < lines.size(); i++ )
@@ -118,10 +141,10 @@ int main(){
         cv::Point pt1, pt2;
         double a = cos(theta), b = sin(theta);
         double x0 = a*rho, y0 = b*rho;
-        pt1.x = cvRound(x0 + 1000*(-b));
-        pt1.y = cvRound(y0 + 1000*(a));
-        pt2.x = cvRound(x0 - 1000*(-b));
-        pt2.y = cvRound(y0 - 1000*(a));
+        pt1.x = cvRound(x0 + biggest*(-b));
+        pt1.y = cvRound(y0 + biggest*(a));
+        pt2.x = cvRound(x0 - biggest*(-b));
+        pt2.y = cvRound(y0 - biggest*(a));
         line( img_dst2, pt1, pt2, cv::Scalar(0,0,255), 2, cv::LINE_AA);
     }
 
