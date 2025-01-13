@@ -132,26 +132,36 @@ std::pair<int,line*> hough_parallel(cv::Mat img, int threshold,
 }
 
 
-int main(){
-    std::string filename;
-    std::cout << "Enter the filename: ";
-    std::cin >> filename;
+int main(int argc, char** argv){
+
+    // check if cuda device available 
+    int deviceCount;
+    cudaGetDeviceCount(&deviceCount);
+    if(deviceCount == 0){
+        std::cout << "No CUDA device found" << std::endl;
+        return -1;
+    }
+
+    //get device properties
+    int device = 0;
+    cudaGetDevice(&device);
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, device);
+    std::cout << "Cuda device: " << prop.name << std::endl;
+    
+    // check if image is provided
+    if(argc < 3){
+        std::cout << "image not provided" << std::endl;
+        return -1;
+    }
+
+    std::string filename = argv[1];
+    int threshold = std::stoi(argv[2]);
+
     std::string path ="../pictures/" + filename;
     cv::Mat img = cv::imread(path, 1);
     cv::Mat img_blur, img_dst; 
     img_dst = img.clone();
-
-    int device = 0;
-    cudaGetDevice(&device);
-    cudaDeviceProp prop;
-
-    cudaGetDeviceProperties(&prop, device);
-    std::cout << "Device: " << prop.name << std::endl;
-
-    if(img.empty()){
-        std::cout << "Image not found" << std::endl;
-        return -1;
-    }
 
     int biggest = std::max(img.rows, img.cols);
     
@@ -161,15 +171,25 @@ int main(){
     cv::imwrite("../results/edges.jpg", dst);
 
     std::vector<cv::Vec2f> lines;
-    std::cout << "Starting cv sequential implementation" << std::endl;
-
     auto start = omp_get_wtime();
-    cv::HoughLines(dst, lines, 1, CV_PI/180, 1);
+    cv::HoughLines(dst, lines, 1, CV_PI/180, threshold);
     auto stop = omp_get_wtime();
     auto duration = stop-start;
 
-    std::cout << "Done! \nTime taken: " << duration << '\n' << "Lines detected: " << lines.size() << std::endl;
+    std::cout << "====CV PARAMS====\nTime taken: " << duration << "\nDetected lines: " << lines.size() << '\n';
+
+    start = omp_get_wtime();
+    std::pair<int,line*> result = hough_parallel(dst, threshold, 1, CV_PI/180);
+    stop = omp_get_wtime();
+    duration = stop-start;
     
+    int size = result.first;
+    line * lines_mine = nullptr;
+    lines_mine = result.second;
+    
+    std::cout << "\n====GPU PARAMS===\nTime taken: " << duration << "\nDetected lines: " << size;
+    
+    std::cout << "\n\nDrawing lines for cv and gpu...";
     for( size_t i = 0; i < lines.size(); i++ ){
         float rho = lines[i][0], theta = lines[i][1];
         cv::Point pt1, pt2;
@@ -182,19 +202,6 @@ int main(){
         cv::line(img, pt1, pt2, cv::Scalar(0,0,255), 2, cv::LINE_AA);
     }
 
-    std::cout << "=======================================================\n";
-    std::cout << "Starting my gpu implementation" << std::endl;
-    start = omp_get_wtime();
-    std::pair<int,line*> result = hough_parallel(dst, 1, 1, CV_PI/180);
-    stop = omp_get_wtime();
-    duration = stop-start;
-    
-    int size = result.first;
-    line * lines_mine = nullptr;
-    lines_mine = result.second;
-    
-    std::cout << "Done! \nTime taken: " << duration << std::endl;
-    std::cout << size << "\n";
     for (int i  = 0; i < size ; i++) {
         float theta = lines_mine[i].theta;
         int rho = lines_mine[i].rho;
@@ -206,9 +213,12 @@ int main(){
         cv::Point pt2(cvRound(x0 - biggest * (-b)), cvRound(y0 - biggest * (a)));
         cv::line(img_dst, pt1, pt2, cv::Scalar(0, 0, 255), 2, cv::LINE_AA);
     } 
+    std::cout << " done";
 
+    std::cout << "\nSaving both results...";
     cv::imwrite("../results/result_mine.png",img_dst);
     cv::imwrite("../results/result_cv.png",img);
+    std::cout << " done, exiting\n";
 
     delete [] lines_mine;
 
