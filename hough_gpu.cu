@@ -3,8 +3,7 @@
 #include <cuda_runtime.h>
 #include <vector>
 #include <cmath>
-#include <chrono>
-
+#include "omp.h"
 
 struct line
 {
@@ -141,16 +140,13 @@ int main(){
     cv::Mat img = cv::imread(path, 1);
     cv::Mat img_blur, img_dst; 
     img_dst = img.clone();
+
     int device = 0;
-    cudaError_t error = cudaGetDeviceCount(&device);
+    cudaGetDevice(&device);
+    cudaDeviceProp prop;
 
-    if (error != cudaSuccess) {
-        std::cerr << "Error getting CUDA device count: " << cudaGetErrorString(error) << std::endl;
-        return -1;
-    }
-    
-    std::cout << "CUDA Device Count: " << device << std::endl;
-
+    cudaGetDeviceProperties(&prop, device);
+    std::cout << "Device: " << prop.name << std::endl;
 
     if(img.empty()){
         std::cout << "Image not found" << std::endl;
@@ -167,12 +163,12 @@ int main(){
     std::vector<cv::Vec2f> lines;
     std::cout << "Starting cv sequential implementation" << std::endl;
 
-    auto start = std::chrono::high_resolution_clock::now();
-    cv::HoughLines(dst, lines, 1, CV_PI/180, 100);
-    auto stop = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+    auto start = omp_get_wtime();
+    cv::HoughLines(dst, lines, 1, CV_PI/180, 1);
+    auto stop = omp_get_wtime();
+    auto duration = stop-start;
 
-    std::cout << "Done! \nTime taken: " << duration.count() << " microseconds" << '\n' << "Lines detected: " << lines.size() << std::endl;
+    std::cout << "Done! \nTime taken: " << duration << '\n' << "Lines detected: " << lines.size() << std::endl;
     
     for( size_t i = 0; i < lines.size(); i++ ){
         float rho = lines[i][0], theta = lines[i][1];
@@ -188,16 +184,16 @@ int main(){
 
     std::cout << "=======================================================\n";
     std::cout << "Starting my gpu implementation" << std::endl;
-    start = std::chrono::high_resolution_clock::now();
-    std::pair<int,line*> result = hough_parallel(dst, 150, 1, CV_PI/180);
-    stop = std::chrono::high_resolution_clock::now();
-    duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+    start = omp_get_wtime();
+    std::pair<int,line*> result = hough_parallel(dst, 1, 1, CV_PI/180);
+    stop = omp_get_wtime();
+    duration = stop-start;
     
     int size = result.first;
     line * lines_mine = nullptr;
     lines_mine = result.second;
     
-    std::cout << "Done! \nTime taken: " << duration.count() << " microseconds" << std::endl;
+    std::cout << "Done! \nTime taken: " << duration << std::endl;
     std::cout << size << "\n";
     for (int i  = 0; i < size ; i++) {
         float theta = lines_mine[i].theta;
