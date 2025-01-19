@@ -5,14 +5,13 @@
 #include <cmath>
 #include "omp.h"
 
-struct line
-{
+struct line{
     int rho;
     float theta;
 };
 
 
-int compute_angle(double min_theta, double max_theta, double theta_step){
+int compute_angle(float min_theta, float max_theta, float theta_step){
     int numangle = cvFloor((max_theta - min_theta) / theta_step) + 1;
     if ( numangle > 1 && fabs(CV_PI - (numangle-1)*theta_step) < theta_step/2 ) --numangle;
     return numangle;
@@ -29,7 +28,7 @@ __global__ void fill_trig_tables(float *sin_table, float *cos_table, float min_t
 }
 
 __global__ void fill_accum(int *accum, unsigned char *data, float *cos_table, float *sin_table,
-                           int width, int height, int num_angle, int num_rho){    
+                           int width, int height, int num_angle, int num_rho){
     int x = blockDim.x * blockIdx.x + threadIdx.x;
     int y = blockDim.y * blockIdx.y + threadIdx.y;
     if(y >= height || x >= width) return;
@@ -42,7 +41,7 @@ __global__ void fill_accum(int *accum, unsigned char *data, float *cos_table, fl
     }
 }
 
-__global__ void find_maxims(int* accum, int num_angle, int num_rho, int threshold, double min_theta, double theta_step, double rho_step, line* lines, int *current_size){
+__global__ void find_maxims(int* accum, int num_angle, int num_rho, int threshold, float min_theta, float theta_step, float rho_step, line* lines, int *current_size){
     int angle = blockDim.x * blockIdx.x + threadIdx.x;
     int rho = blockDim.y * blockIdx.y + threadIdx.y;
     if(angle >= num_angle || rho >= num_rho) return;
@@ -59,8 +58,8 @@ __global__ void find_maxims(int* accum, int num_angle, int num_rho, int threshol
 }
 
 std::pair<int,line*> hough_parallel(cv::Mat img, int threshold,
-                    float rho, float theta, double min_theta=0.0, double max_theta=CV_PI){
-    
+                    float rho, float theta, float min_theta=0.0, float max_theta=CV_PI){
+
     float irho = 1 / rho;
     int height = img.rows;
     int width = img.cols;
@@ -78,51 +77,60 @@ std::pair<int,line*> hough_parallel(cv::Mat img, int threshold,
     int *daccum = nullptr;
     float *dsin_table = nullptr, *dcos_table = nullptr;
     unsigned char *ddata = nullptr;
+    int *d_counter = nullptr;
+    int counter = 0;
+    line* lines = nullptr;
+
+    cudaStream_t stream1, stream2, stream3;
+    cudaStreamCreate(&stream1);
+    cudaStreamCreate(&stream2);
+    cudaStreamCreate(&stream3);
+
     cudaMalloc(&dsin_table, num_angle * sizeof(float));
     cudaMalloc(&dcos_table, num_angle * sizeof(float));
     cudaMalloc(&daccum, (num_angle+2) * (num_rho+2) * sizeof(int));
-    cudaMemset(daccum, 0, (num_angle+2) * (num_rho+2) * sizeof(int));
+    cudaMemsetAsync(daccum, 0, (num_angle+2) * (num_rho+2) * sizeof(int),stream1);
     cudaMalloc(&ddata,image_size);
-    cudaMemcpy(ddata, img.ptr(), image_size, cudaMemcpyHostToDevice);
-    
-    
+    cudaMemcpyAsync(ddata, img.ptr(), image_size, cudaMemcpyHostToDevice,stream1);
+
     // ============================PRECOMPUTE TRIG TABLES=====================================
 
     int threadsPerBlock = 256;
     int blocksPerGridTrig = (num_angle + threadsPerBlock - 1) / threadsPerBlock;
 
-    fill_trig_tables<<<blocksPerGridTrig, threadsPerBlock>>>(dsin_table, dcos_table, min_theta, theta, num_angle, irho);
-    cudaDeviceSynchronize();
+    fill_trig_tables<<<blocksPerGridTrig, threadsPerBlock, 0, stream1>>>(dsin_table, dcos_table, min_theta, theta, num_angle, irho);
 
     // ============================FILL ACCUMULATOR==================================
 
-    dim3 threadsPerBlockAccum(16, 16); 
+    dim3 threadsPerBlockAccum(16, 16);
     dim3 blocksPerGridAccum((width + threadsPerBlockAccum.x - 1) / threadsPerBlockAccum.x,
                        (height + threadsPerBlockAccum.y - 1) / threadsPerBlockAccum.y);
 
-    fill_accum<<<blocksPerGridAccum, threadsPerBlockAccum>>>(daccum, ddata, dcos_table, dsin_table, width, height, num_angle, num_rho);
-    cudaDeviceSynchronize();
+    fill_accum<<<blocksPerGridAccum, threadsPerBlockAccum, 0, stream2>>>(daccum, ddata, dcos_table, dsin_table, width, height, num_angle, num_rho);
 
     // ===========================FIND MAXIMS======================================
-    dim3 threadsPerBlockMaxims(16, 16); 
+    dim3 threadsPerBlockMaxims(16, 16);
     dim3 blocksPerGridMaxims(((num_angle+2) + threadsPerBlockMaxims.x - 1) / threadsPerBlockMaxims.x,
                        ((num_rho+2) + threadsPerBlockMaxims.y - 1) / threadsPerBlockMaxims.y);
 
-    int *d_counter = nullptr;
-    int counter = 0;
-    line* lines = nullptr;
+
     cudaMalloc(&lines, (num_angle+2)*(num_rho+2)*sizeof(line));
     cudaMalloc(&d_counter, sizeof(int));
     cudaMemcpy(d_counter, &counter, sizeof(int), cudaMemcpyHostToDevice);
-    
-    find_maxims<<<blocksPerGridMaxims, threadsPerBlockMaxims>>>(daccum, num_angle, num_rho, threshold, min_theta, theta, rho, lines, d_counter);
-    
-    cudaDeviceSynchronize();
+
+    find_maxims<<<blocksPerGridMaxims, threadsPerBlockMaxims, 0, stream3>>>(daccum, num_angle, num_rho, threshold, min_theta, theta, rho, lines, d_counter);
+
+    cudaStreamSynchronize(stream1);
+    cudaStreamSynchronize(stream2);
+    cudaStreamSynchronize(stream3);
+
     cudaMemcpy(&counter, d_counter, sizeof(int), cudaMemcpyDeviceToHost);
     line* lines_cpu = (line*)malloc(counter*sizeof(line));
     cudaMemcpy(lines_cpu, lines, counter*sizeof(line), cudaMemcpyDeviceToHost);
-    cudaDeviceSynchronize();
 
+    cudaStreamDestroy(stream1);
+    cudaStreamDestroy(stream2);
+    cudaStreamDestroy(stream3);
     cudaFree(dsin_table);
     cudaFree(dcos_table);
     cudaFree(daccum);
@@ -134,7 +142,7 @@ std::pair<int,line*> hough_parallel(cv::Mat img, int threshold,
 
 int main(int argc, char** argv){
 
-    // check if cuda device available 
+    // check if cuda device available
     int deviceCount;
     cudaGetDeviceCount(&deviceCount);
     if(deviceCount == 0){
@@ -142,13 +150,13 @@ int main(int argc, char** argv){
         return -1;
     }
 
-    //get device properties
+    // get device properties
     int device = 0;
     cudaGetDevice(&device);
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, device);
     std::cout << "Cuda device: " << prop.name << std::endl;
-    
+
     // check if image is provided
     if(argc < 3){
         std::cout << "image not provided" << std::endl;
@@ -160,11 +168,11 @@ int main(int argc, char** argv){
 
     std::string path ="../pictures/" + filename;
     cv::Mat img = cv::imread(path, 1);
-    cv::Mat img_blur, img_dst; 
+    cv::Mat img_blur, img_dst;
     img_dst = img.clone();
 
     int biggest = std::max(img.rows, img.cols);
-    
+
     cv::Mat dst;
     cv::blur(img, img_blur, cv::Size(5,5));
     cv::Canny(img_blur, dst, 100, 150, 3);
@@ -182,14 +190,13 @@ int main(int argc, char** argv){
     std::pair<int,line*> result = hough_parallel(dst, threshold, 1, CV_PI/180);
     stop = omp_get_wtime();
     duration = stop-start;
-    
+
     int size = result.first;
     line * lines_mine = nullptr;
     lines_mine = result.second;
-    
-    std::cout << "\n====GPU PARAMS===\nTime taken: " << duration << "\nDetected lines: " << size;
-    
-    std::cout << "\n\nDrawing lines for cv and gpu...";
+
+    std::cout << "\n====GPU PARAMS===\nTime taken: " << duration << "\nDetected lines: " << size << "\n\nDrawing lines for cv and gpu...";
+
     for( size_t i = 0; i < lines.size(); i++ ){
         float rho = lines[i][0], theta = lines[i][1];
         cv::Point pt1, pt2;
@@ -212,7 +219,7 @@ int main(int argc, char** argv){
         cv::Point pt1(cvRound(x0 + biggest * (-b)), cvRound(y0 + biggest * (a)));
         cv::Point pt2(cvRound(x0 - biggest * (-b)), cvRound(y0 - biggest * (a)));
         cv::line(img_dst, pt1, pt2, cv::Scalar(0, 0, 255), 2, cv::LINE_AA);
-    } 
+    }
     std::cout << " done";
 
     std::cout << "\nSaving both results...";
