@@ -3,11 +3,23 @@
 #include<opencv2/imgproc/imgproc.hpp>
 #include<omp.h>
 
+void calculate_trig(float *cos, float *sin){
+    for (int i  = 0; i < 360; i++){
+        cos[i] = std::cos(i);
+        sin[i] = std::sin(i);
+    }
+}
+
 std::vector<std::tuple<int,int,int>> hough_circles(unsigned char* data, int height, int width, int radius_min, int radius_max, unsigned int threshold){
     
     // accum 
     unsigned int *acc = new unsigned int[height*width*(radius_max-radius_min+1)];
     memset(acc, 0, height*width*(radius_max-radius_min+1)*sizeof(unsigned int));
+
+    float *sin_tab = new float[360];
+    float *cos_tab = new float[360];
+
+    calculate_trig(cos_tab, sin_tab);
 
     // fill accum
     for(int y = 0; y < height; y++){
@@ -16,8 +28,8 @@ std::vector<std::tuple<int,int,int>> hough_circles(unsigned char* data, int heig
                 // draw circles in accum
                 for (int r = radius_min; r <= radius_max; r++){
                     for (int i = 0; i < 360; i++){
-                        int a = (float)x - r * cos(i);
-                        int b = (float)y - r * sin(i);
+                        int a = (float)x - r * cos_tab[i];
+                        int b = (float)y - r * sin_tab[i];
                         if (a >= 0 && a < width && b >= 0 && b < height){
                             acc[(r - radius_min)*height*width + b*width + a]++;
                         }
@@ -28,16 +40,40 @@ std::vector<std::tuple<int,int,int>> hough_circles(unsigned char* data, int heig
     }
 
     std::vector<std::tuple<int,int,int>> centers;
+    int circles = 0;
     for (int r = radius_min; r <= radius_max; r++){
         for (int y = 0; y < height; y++){
             for (int x = 0; x < width; x++){
+                // non-maximum suppression
                 if (acc[(r - radius_min)*height*width + y*width + x] > threshold){
-                    centers.push_back(std::make_tuple(x,y,r));
+                    bool is_local_max = true;
+                    for (int dy = -1; dy <= 1; dy++){
+                        for (int dx = -1; dx <= 1; dx++){
+                            if (dy == 0 && dx == 0) continue;
+                            int ny = y + dy;
+                            int nx = x + dx;
+                            if (ny >= 0 && ny < height && nx >= 0 && nx < width){
+                                if (acc[(r - radius_min)*height*width + ny*width + nx] > acc[(r - radius_min)*height*width + y*width + x]){
+                                    is_local_max = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!is_local_max) break;
+                    }
+                    if (is_local_max){
+                        centers.push_back(std::make_tuple(x,y,r));
+                        circles++;
+                    }
                 }
             }
         }
     }
 
+    std::cout << circles << " circles found" << std::endl;
+    delete[] acc;
+    delete[] sin_tab;
+    delete[] cos_tab;
     return centers;
 }
 
@@ -47,7 +83,7 @@ int main(int argc, char** argv){
     int radius_min = std::stoi(argv[2]);
     int radius_max = std::stoi(argv[3]);
     
-    std::string path = "../pictures_circles/";
+    std::string path = "pictures_circles/";
     std::string img_path = path + img_name;
     cv::Mat img = cv::imread(img_path, 1);
     
