@@ -76,6 +76,7 @@ int main(int argc, char** argv){
     cv::hconcat(img, edges, img_concat);
     cv::hconcat(img_concat, img_result, img_concat);
     cv::imshow("Original image, edges and results", img_concat);
+    cv::imwrite("../results/result.jpg", img_concat);
     cv::waitKey(0);
 
 

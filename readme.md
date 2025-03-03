@@ -1,11 +1,11 @@
 # Fast hough transform using GPU
 
-### Dependencies
+## Dependencies
 - OpenCV
 - CUDA
 - OpenMP
 
-### Building
+## Building
 When in the project folder:
 ```
 $ mkdir build && cd build
@@ -13,7 +13,7 @@ $ cmake build ..
 $ cmake --build .
 ```
 
-### Running
+## Running
 Currently, there are four programs:
 - hough_gpu_streams: line detection using gpu and streams
 - hough_gpu_managed: line detectino using managed cuda allocation
@@ -39,3 +39,7 @@ where:
 - `filename`: an image file located in the `pictures` folder.
 - `min_radius`: minimal radius (inclusive).
 - `max_radius`: maximal radius (inclusive).
+
+## Examples
+### Circles
+![Circle Detection](results/result.jpg)
