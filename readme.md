@@ -6,7 +6,7 @@
 - OpenMP
 
 ### Building
-When in the main folder:
+When in the project folder:
 ```
 $ mkdir build && cd build
 $ cmake build ..
@@ -14,18 +14,28 @@ $ cmake --build .
 ```
 
 ### Running
-Currently, there are three programs:
-- hough_gpu_streams: using streams
-- hough_gpu_managed: using managed cuda allocation
-- hough_seq: using basic cpu implementation
+Currently, there are four programs:
+- hough_gpu_streams: line detection using gpu and streams
+- hough_gpu_managed: line detectino using managed cuda allocation
+- hough_seq: line detection using cpu
+- hough_circles_cpu: basic circles detection with radius range using cpu
 
-Execution looks like this:
+### Execution
+#### Lines
 ```
 ./program_name filename threshold
 ```
 where:
 - `program_name`: name of a selected program.
 - `filename`: an image file located in the `pictures` folder.
-- `threshold`: value used while filling the accumulator.
+- `threshold`: value used while filling the accumulator (inclusive).
 
-Every program is compared with sequential OpenCV implementation.
+#### Circles
+```
+./program_name filename min_radius max_radius
+```
+where:
+- `program_name`: name of a selected program.
+- `filename`: an image file located in the `pictures` folder.
+- `min_radius`: minimal radius (inclusive).
+- `max_radius`: maximal radius (inclusive).

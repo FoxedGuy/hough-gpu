@@ -1,5 +1,7 @@
 #include<iostream>
 #include<opencv2/opencv.hpp>
+#include<opencv2/imgproc/imgproc.hpp>
+#include<omp.h>
 
 std::vector<std::tuple<int,int,int>> hough_circles(unsigned char* data, int height, int width, int radius_min, int radius_max, unsigned int threshold){
     
@@ -40,11 +42,12 @@ std::vector<std::tuple<int,int,int>> hough_circles(unsigned char* data, int heig
 }
 
 int main(int argc, char** argv){
-    std::string path = "../pictures_circles/";
     
     std::string img_name = argv[1];
     int radius_min = std::stoi(argv[2]);
     int radius_max = std::stoi(argv[3]);
+    
+    std::string path = "../pictures_circles/";
     std::string img_path = path + img_name;
     cv::Mat img = cv::imread(img_path, 1);
     
@@ -53,19 +56,28 @@ int main(int argc, char** argv){
         return -1;
     }
 
+    cv::Mat img_result = img.clone();
     cv::Mat blur;
     cv::Mat edges;
     cv::GaussianBlur(img, blur, cv::Size(9,9), 2, 2);
     cv::Canny(blur, edges, 100, 200);
 
+    auto start = omp_get_wtime();
     std::vector<std::tuple<int,int,int>> centers = hough_circles(edges.data, edges.rows, edges.cols, radius_min, radius_max,200);
-
+    auto end = omp_get_wtime();
+    std::cout << "Time: " << end - start << std::endl;
+    
     for (auto center: centers){
-        cv::circle(img, cv::Point(std::get<0>(center), std::get<1>(center)), std::get<2>(center), cv::Scalar(255, 0, 255), 2);
+        cv::circle(img_result, cv::Point(std::get<0>(center), std::get<1>(center)), std::get<2>(center), cv::Scalar(255, 0, 255), 2);
     }
 
-    cv::imshow("Hough Circle", img);
+    cv::Mat img_concat = cv::Mat::zeros(img.rows, img.cols + edges.cols, CV_8UC3);
+    cv::cvtColor(edges, edges, cv::COLOR_GRAY2BGR);
+    cv::hconcat(img, edges, img_concat);
+    cv::hconcat(img_concat, img_result, img_concat);
+    cv::imshow("Original image, edges and results", img_concat);
     cv::waitKey(0);
+
 
     return 0;
 }
