@@ -1,7 +1,7 @@
 #include<iostream>
 #include<opencv2/opencv.hpp>
 
-std::pair<int,int> hough_circles(unsigned char* data, int height, int width, int radius){
+std::vector<std::pair<int,int>> hough_circles(unsigned char* data, int height, int width, int radius, unsigned int threshold){
     
     // accum 
     unsigned int *acc = new unsigned int[height*width];
@@ -23,21 +23,16 @@ std::pair<int,int> hough_circles(unsigned char* data, int height, int width, int
         }
     }
 
-    //get max value in accum
-    int max = 0;
-    int max_y = 0;
-    int max_x = 0;
+    std::vector<std::pair<int,int>> centers;
     for (int y = 0; y < height; y++){
         for (int x = 0; x < width; x++){
-            if (acc[y*width + x] > max){
-                max = acc[y*width + x];
-                max_y = y;
-                max_x = x;
+            if (acc[y*width + x] > threshold){
+                centers.push_back(std::pair<int,int>(x,y));
             }
         }
     }
 
-    return std::pair<int,int>(max_x, max_y);
+    return centers;
 }
 
 int main(int argc, char** argv){
@@ -57,9 +52,11 @@ int main(int argc, char** argv){
     cv::GaussianBlur(img, blur, cv::Size(9,9), 2, 2);
     cv::Canny(blur, edges, 100, 200);
 
-    std::pair<int,int> center = hough_circles(edges.data, edges.rows, edges.cols, 100);
+    std::vector<std::pair<int,int>> centers = hough_circles(edges.data, edges.rows, edges.cols, 100,200);
 
-    cv::circle(img, cv::Point(center.first, center.second), 100, cv::Scalar(0, 0, 255), 2);
+    for (auto center: centers){
+        cv::circle(img, cv::Point(center.first, center.second), 100, cv::Scalar(0, 0, 255), 2);
+    }
 
     cv::imshow("Hough Circle", img);
     cv::waitKey(0);
