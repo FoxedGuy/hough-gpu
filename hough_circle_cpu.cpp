@@ -11,7 +11,7 @@ std::vector<std::pair<int,int>> hough_circles(unsigned char* data, int height, i
     for(int y = 0; y < height; y++){
         for (int x = 0; x < width; x++){
             if (data[y*width + x] > 0){
-                // draw circle in accum
+                // draw circles in accum
                 for (int i = 0; i < 360; i++){
                     int a = (float)x - radius * cos(i);
                     int b = (float)y - radius * sin(i);
@@ -39,6 +39,7 @@ int main(int argc, char** argv){
     std::string path = "../pictures_circles/";
     
     std::string img_name = argv[1];
+    int radius = std::stoi(argv[2]);
     std::string img_path = path + img_name;
     cv::Mat img = cv::imread(img_path, 1);
     
@@ -52,10 +53,10 @@ int main(int argc, char** argv){
     cv::GaussianBlur(img, blur, cv::Size(9,9), 2, 2);
     cv::Canny(blur, edges, 100, 200);
 
-    std::vector<std::pair<int,int>> centers = hough_circles(edges.data, edges.rows, edges.cols, 100,200);
+    std::vector<std::pair<int,int>> centers = hough_circles(edges.data, edges.rows, edges.cols, radius,200);
 
     for (auto center: centers){
-        cv::circle(img, cv::Point(center.first, center.second), 100, cv::Scalar(0, 0, 255), 2);
+        cv::circle(img, cv::Point(center.first, center.second), radius, cv::Scalar(255, 0, 255), 2);
     }
 
     cv::imshow("Hough Circle", img);
