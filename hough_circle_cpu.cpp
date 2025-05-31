@@ -10,6 +10,29 @@ void calculate_trig(float *cos, float *sin){
     }
 }
 
+void saveAccumulatorImage(int* accu, int numangle, int numrho, const std::string& filename) {
+    cv::Mat accuImage(numangle, numrho, CV_32SC1);
+    for (int angle = 0; angle < numangle; ++angle) {
+        for (int rho = 0; rho < numrho; ++rho) {
+            int value = accu[(angle + 1) * (numrho + 2) + (rho + 1)];
+            accuImage.at<int>(angle, rho) = value;
+        }
+    }
+
+    // Normalize to 8-bit grayscale for saving
+    cv::Mat normalized;
+    cv::normalize(accuImage, normalized, 0, 255, cv::NORM_MINMAX, CV_8UC1);
+
+    // Save to file
+    cv::imwrite(filename, normalized);
+
+    int scaleFactor = 7; // squeeze width to 1/4
+    cv::Mat resized;
+    cv::resize(normalized, resized, cv::Size(normalized.cols / scaleFactor, normalized.rows), cv::INTER_AREA);
+
+    cv::imwrite("../results/accumulator_squeezed.png", resized);
+}
+
 std::vector<std::tuple<int,int,int>> hough_circles(unsigned char* data, int height, int width, int radius_min, int radius_max, unsigned int threshold){
     
     // accum 
@@ -83,7 +106,7 @@ int main(int argc, char** argv){
     int radius_min = std::stoi(argv[2]);
     int radius_max = std::stoi(argv[3]);
     
-    std::string path = "pictures_circles/";
+    std::string path = "../pictures_circles/";
     std::string img_path = path + img_name;
     cv::Mat img = cv::imread(img_path, 1);
     
@@ -112,7 +135,7 @@ int main(int argc, char** argv){
     cv::hconcat(img, edges, img_concat);
     cv::hconcat(img_concat, img_result, img_concat);
     cv::imshow("Original image, edges and results", img_concat);
-    cv::imwrite("results/lines/cpu/result.jpg", img_concat);
+    cv::imwrite("../results/lines/cpu/result.jpg", img_concat);
     cv::waitKey(0);
 
 

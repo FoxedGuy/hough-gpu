@@ -27,6 +27,8 @@ int compute_angle(float min_theta, float max_theta, float theta_step){
     return numangle;
 }
 
+
+
 __global__ void fill_trig_tables(float *sin_table, float *cos_table, float min_theta, float theta, int num_angle, float irho){
     int index = blockDim.x * blockIdx.x + threadIdx.x;
     if(index < num_angle){

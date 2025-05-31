@@ -155,7 +155,7 @@ int main(int argc, char** argv){
     int radius_min = std::stoi(argv[2]);
     int radius_max = std::stoi(argv[3]);
     int threshold = std::stoi(argv[4]);
-    std::string path = "pictures_circles/" + filename;
+    std::string path = "../pictures_circles/" + filename;
     cv::Mat img = cv::imread(path, 1);
 
     if(img.empty()){

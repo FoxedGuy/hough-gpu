@@ -1,0 +1,17 @@
+version: "3.9"
+services:
+  hough-cuda:
+    build: .
+    container_name: hough-cuda-dev
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - .:/workspace
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]

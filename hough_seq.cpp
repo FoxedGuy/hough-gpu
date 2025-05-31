@@ -38,6 +38,27 @@ void find_maxims(int * accu, std::vector<std::pair<float,float>> & lines, int nu
     }
 }
 
+void saveAccumulatorImage(int* accu, int numangle, int numrho, const std::string& filename) {
+    cv::Mat accuImage(numangle, numrho, CV_32SC1);
+    for (int angle = 0; angle < numangle; ++angle) {
+        for (int rho = 0; rho < numrho; ++rho) {
+            int value = accu[(angle + 1) * (numrho + 2) + (rho + 1)];
+            accuImage.at<int>(angle, rho) = value;
+        }
+    }
+
+    cv::Mat normalized;
+    cv::normalize(accuImage, normalized, 0, 255, cv::NORM_MINMAX, CV_8UC1);
+
+    cv::imwrite(filename, normalized);
+
+    int scaleFactor = 7; 
+    cv::Mat resized;
+    cv::resize(normalized, resized, cv::Size(normalized.cols / scaleFactor, normalized.rows), cv::INTER_AREA);
+
+    cv::imwrite("../results/accumulator_squeezed.png", resized);
+}
+
 std::vector<std::pair<float,float>> hough_transform(cv::Mat img, int threshold, float rho, float theta, double min_theta=0.0, double max_theta=CV_PI){
     float irho = 1./rho;
     
@@ -48,8 +69,8 @@ std::vector<std::pair<float,float>> hough_transform(cv::Mat img, int threshold, 
     int max_rho = width+height;
     int min_rho = -max_rho;
 
-    int numangle = compute_angle(min_theta, max_theta, theta);
-    int numrho = cvRound((max_rho - min_rho) * irho);
+    int numangle = cvRound(CV_PI / theta);
+    int numrho = cvRound(((width+height)*2+1)/rho);
 
     int*accu = new int[(numangle+2)*(numrho+2)]{0};
 
@@ -69,6 +90,8 @@ std::vector<std::pair<float,float>> hough_transform(cv::Mat img, int threshold, 
             }
         }
     }
+
+    // saveAccumulatorImage(accu, numangle, numrho, "../results/accumulator.png");
 
     std::vector<std::pair<float,float>> lines;
     find_maxims(accu,lines,numrho,numangle,threshold,min_theta,theta,rho);
@@ -103,7 +126,7 @@ int main(){
 
     cv::Mat img_edge_cv = img_edge.clone();
     auto start = omp_get_wtime();
-    auto lines = hough_transform(img_edge,50, 1,CV_PI/180);
+    auto lines = hough_transform(img_edge,100, 1,CV_PI/180);
     auto stop = omp_get_wtime();
     auto duration = stop - start;
     
@@ -114,7 +137,7 @@ int main(){
     std::vector<cv::Vec2f> lines_cv;
     
     start = omp_get_wtime();
-    cv::HoughLines(img_edge_cv, lines_cv, 50, CV_PI/180, 1, 0, 0);
+    cv::HoughLines(img_edge_cv, lines_cv, 1, CV_PI/180, 100);
     stop = omp_get_wtime();
     auto duration_cv = stop-start;
 
