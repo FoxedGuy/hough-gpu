@@ -1,42 +1,8 @@
 #include <cmath>
-#include <chrono>
 #include <string>
 #include "opencv2/opencv.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
 #include "omp.h"
-
-int compute_angle(double min_theta, double max_theta, double theta_step){
-    int numangle = cvFloor((max_theta - min_theta) / theta_step) + 1;
-    if ( numangle > 1 && fabs(CV_PI - (numangle-1)*theta_step) < theta_step/2 )
-        --numangle;
-    return numangle;
-}
-
-// precompute trigonometric values from 0 to angles_range
-void precompute_tryg(double * cosarr, double * sinarr, int numangle, double min_theta, double theta_step, float irho){
-    float ang = min_theta;
-    for (int angle = 0; angle < numangle;ang+=(float)theta_step, angle++){
-        cosarr[angle] = std::cos(ang) *irho;
-        sinarr[angle] = std::sin(ang) *irho;
-    }
-}
-
-// find local maximums in accuulator, write them to vector of lines if above threshold
-void find_maxims(int * accu, std::vector<std::pair<float,float>> & lines, int numrho, int numangle, int threshold, 
-                 double min_theta, float theta_step, float rho_step){
-    for (int r = 0; r < numrho; ++r) {
-        for (int theta = 0; theta < numangle; ++theta){
-            int current_ind = (theta+1)*(numrho+2)+r+1;
-            if( accu[current_ind] > threshold &&
-                accu[current_ind] > accu[current_ind - 1] && accu[current_ind] >= accu[current_ind + 1] &&
-                accu[current_ind] > accu[current_ind - numrho - 2 ] && accu[current_ind] >= accu[current_ind + numrho + 2] ){
-                float rho = (r - (numrho-1)*0.5f) * rho_step;
-                float angle = min_theta + theta * theta_step;
-                lines.push_back(std::pair<float,float>(rho,angle));
-            }
-        }	
-    }
-}
 
 void saveAccumulatorImage(int* accu, int numangle, int numrho, const std::string& filename) {
     cv::Mat accuImage(numangle, numrho, CV_32SC1);
@@ -59,42 +25,52 @@ void saveAccumulatorImage(int* accu, int numangle, int numrho, const std::string
     cv::imwrite("../results/accumulator_squeezed.png", resized);
 }
 
-std::vector<std::pair<float,float>> hough_transform(cv::Mat img, int threshold, float rho, float theta, double min_theta=0.0, double max_theta=CV_PI){
-    float irho = 1./rho;
+std::vector<std::pair<float,float>> hough_transform(cv::Mat img, int threshold, float rho, float theta, float min_theta=0.0, float max_theta=CV_PI){
     
-    unsigned char *data = img.ptr();
-    int width = img.cols;
-    int height = img.rows;
+    const float irho = 1./rho;
+    
+    const int width = img.cols;
+    const int height = img.rows;
+    const int max_rho = width+height;
 
-    int max_rho = width+height;
-    int min_rho = -max_rho;
+    const int numangle = cvFloor((max_theta - min_theta) / theta) + 1;
+    const int numrho = cvRound((max_rho*2+1)*irho);
+    const int accu_size = (numangle+2)*(numrho+2);
 
-    int numangle = cvRound(CV_PI / theta);
-    int numrho = cvRound(((width+height)*2+1)/rho);
+    int *accu = new int[accu_size]{0};
+    float *cosvalues = new float[numangle];
+    float *sinvalues = new float[numangle];
 
-    int*accu = new int[(numangle+2)*(numrho+2)]{0};
+    for (int angle = 0; angle < numangle; angle++){
+        float ang = min_theta + angle * theta;
+        cosvalues[angle] = std::cos(ang) * irho;
+        sinvalues[angle] = std::sin(ang) * irho;
+    }
 
-    double *cosvalues = new double[numangle];
-    double *sinvalues = new double[numangle];
+    std::vector<cv::Point> non_zero;
+    cv::findNonZero(img, non_zero);
 
-    precompute_tryg(cosvalues,sinvalues,numangle, min_theta, theta, irho);
-
-    for (int y = 0; y < height; y++){
-        for (int x = 0; x < width; x++){
-            if (data[(y*width)+x] != 0){
-                for (int angle = 0; angle < numangle; angle++){
-                    int r =  round(x*cosvalues[angle]+y*sinvalues[angle]);
-                    r += (numrho-1)/2;
-                    accu[(angle+1)*(numrho+2)+r+1]++;
-                }
-            }
+    for (const auto& pt : non_zero){
+        for (int angle = 0; angle < numangle; angle++){
+            int r = cvRound(pt.x * cosvalues[angle] + pt.y * sinvalues[angle]);
+            r += (numrho - 1) / 2;
+            accu[(angle + 1) * (numrho + 2) + (r + 1)]++;
         }
     }
 
-    // saveAccumulatorImage(accu, numangle, numrho, "../results/accumulator.png");
-
     std::vector<std::pair<float,float>> lines;
-    find_maxims(accu,lines,numrho,numangle,threshold,min_theta,theta,rho);
+    for (int r = 0; r < numrho; ++r) {
+        for (int angle = 0; angle < numangle; ++angle){
+            int ind = (angle+1)*(numrho+2)+r+1;
+            if( accu[ind] > threshold &&
+                accu[ind] > accu[ind - 1] && accu[ind] >= accu[ind + 1] &&
+                accu[ind] > accu[ind - numrho - 2 ] && accu[ind] >= accu[ind + numrho + 2] ){
+                float rho_val = (r - (numrho-1)*0.5f) * rho;
+                float angle_val = min_theta + angle * theta;
+                lines.push_back(std::pair<float,float>(rho_val,angle_val));
+            }
+        }	
+    }
 
     delete [] cosvalues;
     delete [] sinvalues;
@@ -103,17 +79,26 @@ std::vector<std::pair<float,float>> hough_transform(cv::Mat img, int threshold, 
     return lines;   
 }
 
-int main(){
+int main(int argc, char** argv) {
     cv::Mat img_edge;
     cv::Mat img_dst;
     cv::Mat img_blur;
-    std::string filename;
-    std::cout << "Enter the name of the file: ";
-    std::cin >> filename;
-    std::string path = "../pictures/" + filename;
-    cv::Mat img = cv::imread(path, 1);
-    if (!img.data){
-        printf("No image data \n");
+    cv::Mat img;
+    
+    int threshold;
+
+    if (argc == 3){
+        std::string filename = argv[1];
+        std::string path = "../pictures/" + filename;
+
+        img = cv::imread(path, 1);
+        if (img.empty()) {
+            std::cerr << "Failed to load image: " << path << std::endl;
+            return -1;
+        }
+        threshold = std::stoi(argv[2]);
+    }else{
+        std::cout << "Usage: " << argv[0] << " <image_filename> <threshold>\n";
         return -1;
     }
 
@@ -121,12 +106,12 @@ int main(){
 
     img_dst = img.clone();
     cv::blur(img, img_blur,cv::Size(5,5));
-	cv::Canny(img_blur, img_edge, 100, 200, 3);
+	cv::Canny(img_blur, img_edge, 50, 150, 3);
     cv::imwrite("../results/edges.jpg", img_edge);
 
     cv::Mat img_edge_cv = img_edge.clone();
     auto start = omp_get_wtime();
-    auto lines = hough_transform(img_edge,100, 1,CV_PI/180);
+    auto lines = hough_transform(img_edge,threshold, 1,CV_PI/180);
     auto stop = omp_get_wtime();
     auto duration = stop - start;
     
@@ -137,7 +122,7 @@ int main(){
     std::vector<cv::Vec2f> lines_cv;
     
     start = omp_get_wtime();
-    cv::HoughLines(img_edge_cv, lines_cv, 1, CV_PI/180, 100);
+    cv::HoughLines(img_edge_cv, lines_cv, 1, CV_PI/180, threshold);
     stop = omp_get_wtime();
     auto duration_cv = stop-start;
 
@@ -173,5 +158,6 @@ int main(){
 
     cv::imwrite("../results/result_mine.png",img_dst);
     cv::imwrite("../results/result_cv.png",img_dst2);
+
     return 0;
 }
