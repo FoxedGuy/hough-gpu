@@ -16,7 +16,7 @@ void saveAccumulatorImage(int* accu, int numangle, int numrho, const std::string
     cv::Mat normalized;
     cv::normalize(accuImage, normalized, 0, 255, cv::NORM_MINMAX, CV_8UC1);
 
-    cv::imwrite(filename, normalized);
+    cv::imwrite("../results/"+filename, normalized);
 
     int scaleFactor = 7; 
     cv::Mat resized;
