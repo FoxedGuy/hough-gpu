@@ -3,100 +3,76 @@
 #include<opencv2/imgproc/imgproc.hpp>
 #include<omp.h>
 
-void calculate_trig(float *cos, float *sin){
-    for (int i  = 0; i < 360; i++){
-        cos[i] = std::cos(i);
-        sin[i] = std::sin(i);
-    }
-}
-
-void saveAccumulatorImage(int* accu, int numangle, int numrho, const std::string& filename) {
-    cv::Mat accuImage(numangle, numrho, CV_32SC1);
-    for (int angle = 0; angle < numangle; ++angle) {
-        for (int rho = 0; rho < numrho; ++rho) {
-            int value = accu[(angle + 1) * (numrho + 2) + (rho + 1)];
-            accuImage.at<int>(angle, rho) = value;
-        }
-    }
-
-    // Normalize to 8-bit grayscale for saving
-    cv::Mat normalized;
-    cv::normalize(accuImage, normalized, 0, 255, cv::NORM_MINMAX, CV_8UC1);
-
-    // Save to file
-    cv::imwrite(filename, normalized);
-
-    int scaleFactor = 7; // squeeze width to 1/4
-    cv::Mat resized;
-    cv::resize(normalized, resized, cv::Size(normalized.cols / scaleFactor, normalized.rows), cv::INTER_AREA);
-
-    cv::imwrite("../results/accumulator_squeezed.png", resized);
-}
-
-std::vector<std::tuple<int,int,int>> hough_circles(unsigned char* data, int height, int width, int radius_min, int radius_max, unsigned int threshold){
+std::vector<cv::Vec3i> hough_circles(cv::Mat img, int height, int width, int radius_min, int radius_max, unsigned int threshold){    
     
-    // accum 
-    unsigned int *acc = new unsigned int[height*width*(radius_max-radius_min+1)];
-    memset(acc, 0, height*width*(radius_max-radius_min+1)*sizeof(unsigned int));
+    const int numradii = radius_max - radius_min + 1;
+    const int accu_size = height * width * numradii;
+    unsigned int *accu = new unsigned int[accu_size];
+    memset(accu, 0, accu_size*sizeof(unsigned int));
 
-    float *sin_tab = new float[360];
-    float *cos_tab = new float[360];
+    float *sinvalues = new float[360];
+    float *cosvalues = new float[360];
 
-    calculate_trig(cos_tab, sin_tab);
+    for (int i  = 0; i < 360; i++){
+        sinvalues[i] = sin(i);
+        cosvalues[i] = cos(i);
+    }
 
-    // fill accum
-    for(int y = 0; y < height; y++){
-        for (int x = 0; x < width; x++){
-            if (data[y*width + x] > 0){
-                // draw circles in accum
-                for (int r = radius_min; r <= radius_max; r++){
-                    for (int i = 0; i < 360; i++){
-                        int a = (float)x - r * cos_tab[i];
-                        int b = (float)y - r * sin_tab[i];
-                        if (a >= 0 && a < width && b >= 0 && b < height){
-                            acc[(r - radius_min)*height*width + b*width + a]++;
-                        }
-                    }
+    std::vector<cv::Point> non_zero;
+    cv::findNonZero(img, non_zero);
+
+    for (const auto& pt : non_zero){
+        for (int r = radius_min; r <= radius_max; r++){
+            int radius_idx = r - radius_min;
+            int base_idx = radius_idx * height * width;
+            for (int i = 0; i < 360; i++){
+                int a = (pt.x - r * cosvalues[i]);
+                int b = (pt.y - r * sinvalues[i]);
+                if (a >= 0 && a < width && b >= 0 && b < height){
+                    accu[base_idx + b * width + a]++;
                 }
             }
         }
     }
 
-    std::vector<std::tuple<int,int,int>> centers;
-    int circles = 0;
+    const int offsets[8][2] = {
+        {-1, -1}, {-1, 0}, {-1, 1},
+        { 0, -1},          { 0, 1},
+        { 1, -1}, { 1, 0}, { 1, 1}
+    };
+
+    std::vector<cv::Vec3i> centers;
     for (int r = radius_min; r <= radius_max; r++){
+        int radius_idx = r - radius_min;
         for (int y = 0; y < height; y++){
             for (int x = 0; x < width; x++){
-                // non-maximum suppression
-                if (acc[(r - radius_min)*height*width + y*width + x] > threshold){
-                    bool is_local_max = true;
-                    for (int dy = -1; dy <= 1; dy++){
-                        for (int dx = -1; dx <= 1; dx++){
-                            if (dy == 0 && dx == 0) continue;
-                            int ny = y + dy;
-                            int nx = x + dx;
-                            if (ny >= 0 && ny < height && nx >= 0 && nx < width){
-                                if (acc[(r - radius_min)*height*width + ny*width + nx] > acc[(r - radius_min)*height*width + y*width + x]){
-                                    is_local_max = false;
-                                    break;
-                                }
-                            }
-                        }
-                        if (!is_local_max) break;
+                int idx = radius_idx * height * width + y * width + x;
+                int center_val = accu[idx];
+                
+                if (center_val <= threshold) continue;
+
+                bool is_local_max = true;
+                 for (int k = 0; k < 8; ++k) {
+                    int nx = x + offsets[k][0];
+                    int ny = y + offsets[k][1];
+                    int neighbor_idx = radius_idx * height * width + ny * width + nx;
+                    if (accu[neighbor_idx] > center_val) {
+                        is_local_max = false;
+                        break;
                     }
-                    if (is_local_max){
-                        centers.push_back(std::make_tuple(x,y,r));
-                        circles++;
-                    }
+                
+                }
+                if (is_local_max){
+                    centers.emplace_back(x,y,r);
                 }
             }
         }
     }
 
-    std::cout << circles << " circles found" << std::endl;
-    delete[] acc;
-    delete[] sin_tab;
-    delete[] cos_tab;
+    std::cout << centers.size() << " circles found" << std::endl;
+    delete[] accu;
+    delete[] sinvalues;
+    delete[] cosvalues;
     return centers;
 }
 
@@ -118,16 +94,16 @@ int main(int argc, char** argv){
     cv::Mat img_result = img.clone();
     cv::Mat blur;
     cv::Mat edges;
-    cv::GaussianBlur(img, blur, cv::Size(9,9), 2, 2);
+    cv::GaussianBlur(img, blur, cv::Size(5,5), 2, 2);
     cv::Canny(blur, edges, 100, 200);
 
     auto start = omp_get_wtime();
-    std::vector<std::tuple<int,int,int>> centers = hough_circles(edges.data, edges.rows, edges.cols, radius_min, radius_max,200);
+    std::vector<cv::Vec3i> centers = hough_circles(edges, edges.rows, edges.cols, radius_min, radius_max,200);
     auto end = omp_get_wtime();
     std::cout << "Time: " << end - start << std::endl;
     
     for (auto center: centers){
-        cv::circle(img_result, cv::Point(std::get<0>(center), std::get<1>(center)), std::get<2>(center), cv::Scalar(255, 0, 255), 2);
+        cv::circle(img_result, cv::Point(center[0], center[1]), center[2], cv::Scalar(255, 0, 255), 2);
     }
 
     cv::Mat img_concat = cv::Mat::zeros(img.rows, img.cols + edges.cols, CV_8UC3);
