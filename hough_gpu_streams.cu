@@ -210,7 +210,6 @@ std::pair<int,line*> hough_parallel(unsigned char* d_img, int N, int threshold,
     cudaFree(d_y_coords);
     cudaFree(d_count);
 
-    
     return {counter, result};
 }
 
@@ -320,6 +319,11 @@ std::pair<int,line*> hough_parallel_segmented(unsigned char* d_img, int N, int t
     for (int i = 0; i < 4; ++i) cudaStreamDestroy(streams[i]);
     cudaFree(sub1); cudaFree(sub2); cudaFree(sub3); cudaFree(sub4);
     cudaFree(acc1); cudaFree(acc2); cudaFree(acc3); cudaFree(acc4);
+    cudaFree(x1); cudaFree(y1); cudaFree(cnt1);
+    cudaFree(x2); cudaFree(y2); cudaFree(cnt2);
+    cudaFree(x3); cudaFree(y3); cudaFree(cnt3);
+    cudaFree(x4); cudaFree(y4); cudaFree(cnt4);
+    cudaFree(input);
     cudaFree(sinvalues); cudaFree(cosvalues);
     cudaFree(d_lines); cudaFree(d_counter);
 
