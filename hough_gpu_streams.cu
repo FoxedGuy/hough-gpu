@@ -141,7 +141,7 @@ __global__ void find_maxims(int* accum, int numangle, int numrho, int threshold,
 }
 
 std::pair<int,line*> hough_parallel(unsigned char* d_img, int N, int threshold,
-                                    float rho, float theta_step,
+                                    float rho, float theta_step,double *duration,
                                     float min_theta=0.0, float max_theta=CV_PI){
 
     unsigned char *input;    
@@ -198,7 +198,7 @@ std::pair<int,line*> hough_parallel(unsigned char* d_img, int N, int threshold,
     cudaMemcpy(result, d_lines, counter * sizeof(line), cudaMemcpyDeviceToHost);
 
     auto stop_count = omp_get_wtime();
-    std::cout << "\nTime for calculations: " << stop_count-start_count << "\n";
+    if (duration) *duration += stop_count - start_count;
 
     cudaFree(input);
     cudaFree(accum);
@@ -215,7 +215,7 @@ std::pair<int,line*> hough_parallel(unsigned char* d_img, int N, int threshold,
 }
 
 std::pair<int,line*> hough_parallel_segmented(unsigned char* d_img, int N, int threshold,
-    float rho, float theta_step,
+    float rho, float theta_step,double *duration,
     float min_theta=0.0, float max_theta=CV_PI) {
 
     unsigned char *input,*sub1, *sub2, *sub3, *sub4;    
@@ -315,7 +315,7 @@ std::pair<int,line*> hough_parallel_segmented(unsigned char* d_img, int N, int t
     cudaMemcpy(result, d_lines, counter * sizeof(line), cudaMemcpyDeviceToHost);
 
     auto stop_count = omp_get_wtime();
-    std::cout << "\nTime for calculations: " << stop_count-start_count << "\n";
+    if (duration) *duration += stop_count - start_count;
 
     for (int i = 0; i < 4; ++i) cudaStreamDestroy(streams[i]);
     cudaFree(sub1); cudaFree(sub2); cudaFree(sub3); cudaFree(sub4);
@@ -343,118 +343,82 @@ int main(int argc, char** argv){
     std::cout << "Cuda device: " << prop.name << std::endl;
 
     // check if image is provided
-    if(argc < 3){
-        std::cout << "image not provided" << std::endl;
+    if(argc < 4){
+        std::cout << "not enough parametrs" << std::endl;
         return -1;
     }
 
     std::string filename = argv[1];
     int threshold = std::stoi(argv[2]);
+    int N = std::stoi(argv[3]);
 
     std::string path ="../pictures/" + filename;
-    cv::Mat img = cv::imread(path, cv::IMREAD_COLOR);  
-    if (img.empty()) {
-        std::cerr << "Failed to load image: " << path << std::endl;
-        return -1;
+    double total_time_opencv_cpu = 0.0; 
+    double total_time_opencv_gpu = 0.0;
+    double total_time_opencv_gpu_full = 0.0;
+    double total_time_mine_gpu_basic = 0.0;
+    double total_time_mine_gpu_basic_full = 0.0;
+    double total_time_mine_gpu_segmented = 0.0;
+    double total_time_mine_gpu_segmented_full = 0.0;
+
+    for (int experiment = 0; experiment < 10; ++experiment) {
+        cv::Mat img = cv::imread(path, cv::IMREAD_COLOR);  
+        if (img.empty()) {
+            std::cerr << "Failed to load image: " << path << std::endl;
+            return -1;
+        }
+
+        cv::Mat blur, edges;
+        cv::blur(img, blur, cv::Size(5, 5));
+        cv::Canny(blur, edges, 50, 150, 3);
+        int biggest = std::max(img.rows, img.cols);
+
+        std::vector<cv::Vec2f> lines;
+        auto start_cpu = omp_get_wtime();
+        cv::HoughLines(edges, lines, 1, CV_PI/180, threshold);
+        auto stop_cpu = omp_get_wtime();
+        double duration_cpu = stop_cpu - start_cpu;
+        total_time_opencv_cpu += duration_cpu;
+
+        cv::cuda::GpuMat img_gpu, img_lines_gpu;
+        cv::Mat img_lines_cpu;
+        auto cv_hough = cv::cuda::createHoughLinesDetector(1, CV_PI/180, threshold);
+
+        auto start_gpu_full = omp_get_wtime();
+        img_gpu.upload(edges);
+        auto start_gpu = omp_get_wtime();
+        cv_hough->detect(img_gpu, img_lines_gpu);
+        img_lines_gpu.download(img_lines_cpu);
+        auto stop_gpu = omp_get_wtime();
+        double duration_gpu = stop_gpu - start_gpu;
+        double duration_gpu_full = stop_gpu - start_gpu_full;
+        total_time_opencv_gpu += duration_gpu;
+        total_time_opencv_gpu_full += duration_gpu_full;
+
+        unsigned char *d_img = edges.ptr();
+        int N = edges.rows;
+
+        auto start_mine_basic = omp_get_wtime();
+        std::pair<int,line*> result_basic = hough_parallel(d_img, N, threshold, 1, CV_PI/180,&total_time_mine_gpu_basic);
+        auto stop_mine_basic = omp_get_wtime();
+        total_time_mine_gpu_basic_full += (stop_mine_basic - start_mine_basic);
+        delete[] result_basic.second;
+
+        auto start_mine_segmented = omp_get_wtime();
+        std::pair<int,line*> result = hough_parallel_segmented(d_img, N, threshold, 1, CV_PI/180,&total_time_mine_gpu_segmented);
+        auto stop_mine_segmented = omp_get_wtime();
+        total_time_mine_gpu_segmented_full += (stop_mine_segmented - start_mine_segmented);
+        delete[] result.second;
     }
 
-    cv::Mat blur = img.clone();
-    cv::Mat edges = img.clone();
-    cv::Mat img_dst = img.clone();
-    cv::blur(img, blur, cv::Size(5, 5));
-    cv::Canny(blur, edges, 50, 150, 3);
-
-
-    cv::imwrite("../results/edges.jpg", edges);
-
-    int biggest = std::max(img.rows, img.cols);
-
-    //============== OpenCV CPU Hough Transform ==============
-    
-    std::vector<cv::Vec2f> lines;
-    auto start_opencv_cpu = omp_get_wtime();
-    cv::HoughLines(edges, lines, 1, CV_PI/180, threshold);
-    auto stop_opencv_cpu = omp_get_wtime();
-    auto duration_opencv_cpu = stop_opencv_cpu - start_opencv_cpu;
-    std::cout << "====OpenCV CPU PARAMS====\nTime taken: " << duration_opencv_cpu << "\nDetected lines: " << lines.size() << '\n';
-
-    //============== OpenCV GPU Hough Transform ==============
-
-    cv::cuda::GpuMat img_gpu, img_lines_gpu;
-    cv::Mat img_lines_cpu;
-
-    auto cv_hough = cv::cuda::createHoughLinesDetector(1, CV_PI/180, threshold);
-
-    auto start_opencv_gpu_full = omp_get_wtime();
-    
-    img_gpu.upload(edges);
-    
-    auto start_opencv_gpu = omp_get_wtime();
-    cv_hough->detect(img_gpu, img_lines_gpu);
-    
-    img_lines_gpu.download(img_lines_cpu);
-    auto stop_opencv_gpu = omp_get_wtime();
-    
-    auto duration_opencv_gpu = stop_opencv_gpu - start_opencv_gpu;
-    auto duration_opencv_gpu_full = stop_opencv_gpu - start_opencv_gpu_full;
-    
-    std::vector<cv::Vec2f> lines_;
-    lines_.reserve(img_lines_cpu.rows);
-
-    for (int i = 0; i < img_lines_cpu.cols; ++i) {
-        float rho   = img_lines_cpu.at<float>(1, i);
-        float theta = img_lines_cpu.at<float>(0, i);
-        lines_.emplace_back(rho, theta);
-    }
-
-    std::cout << "====OpenCV GPU PARAMS====\nTime taken: " << duration_opencv_gpu <<"\nTime taken with copying:" << duration_opencv_gpu_full << "\nDetected lines: " << lines_.size() << '\n';
-
-    for (const auto& line : lines_) {
-        float rho = line[0];
-        float theta = line[1];
-        double a = cos(theta);
-        double b = sin(theta);
-        double x0 = a * rho;
-        double y0 = b * rho;
-        cv::Point pt1(cvRound(x0 + biggest * (-b)), cvRound(y0 + biggest * (a)));
-        cv::Point pt2(cvRound(x0 - biggest * (-b)), cvRound(y0 - biggest * (a)));
-        cv::line(img_dst, pt1, pt2, cv::Scalar(255, 0, 0), 2, cv::LINE_AA);
-    }
-
-
-
-    unsigned char *d_img = edges.ptr();
-    int N = edges.rows;
-    std::cout << "====Mine GPU PARAMS====";
-    std::cout << "\n#Basic implementation#:\n";
-    auto start_mine_gpu_basic = omp_get_wtime();
-    std::pair<int,line*> result_basic = hough_parallel(d_img, N, threshold, 1, CV_PI/180);
-    auto stop_mine_gpu_basic = omp_get_wtime();
-    auto duration_mine_gpu_basic = stop_mine_gpu_basic - start_mine_gpu_basic;
-    int size_basic = result_basic.first;
-    line * lines_basic = nullptr;
-    lines_basic = result_basic.second;
-    std::cout << "\nTime taken: " << duration_mine_gpu_basic << "\nDetected lines: " << size_basic << "\n\n";
-    
-    std::cout <<"#Segmented implementation#:\n";
-    auto start_mine_gpu = omp_get_wtime();
-    std::pair<int,line*> result = hough_parallel_segmented(d_img, N, threshold, 1, CV_PI/180);
-    auto stop_mine_gpu = omp_get_wtime();
-    auto duration_mine_gpu = stop_mine_gpu-start_mine_gpu;
-
-    int size = result.first;
-    line * lines_mine = nullptr;
-    lines_mine = result.second;
-
-    std::cout << "\nTime taken with copying: " << duration_mine_gpu << "\nDetected lines: " << size << "\n\nDrawing lines for cv and gpu...";
-    std::cout << " done";
-
-    std::cout << "\nSaving both results...";
-    cv::imwrite("../results/lines/gpu/result_mine.png",img_dst);
-    cv::imwrite("../results/lines/gpu/result_cv.png",img);
-    std::cout << " done, exiting\n";
-
-    delete [] lines_mine;
+    std::cout << "\n=== AVERAGE TIMES OVER " << N << " EXPERIMENTS ===\n";
+    std::cout << "OpenCV CPU Hough: " << (total_time_opencv_cpu / N)*1000.0 << " ms\n";
+    std::cout << "OpenCV GPU Hough (kernel only): " << (total_time_opencv_gpu / N)*1000.0 << "ms\n";
+    std::cout << "Mine GPU Hough (basic): " << (total_time_mine_gpu_basic / N)*1000.0 << "ms\n";
+    std::cout << "Mine GPU Hough (segmented): " << (total_time_mine_gpu_segmented / N)*1000.0 << "ms\n";
+    std::cout << "OpenCV GPU Hough (full incl. transfer): " << (total_time_opencv_gpu_full / N)*1000.0 << "ms\n";
+    std::cout << "Mine GPU Hough (basic incl. transfer): " << (total_time_mine_gpu_basic_full / N)*1000.0 << "ms\n";
+    std::cout << "Mine GPU Hough (segmented incl. transfer): " << (total_time_mine_gpu_segmented_full / N)*1000.0 << "ms\n";
 
     return 0;
 }
