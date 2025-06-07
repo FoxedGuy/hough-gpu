@@ -361,7 +361,12 @@ int main(int argc, char** argv){
     double total_time_mine_gpu_segmented = 0.0;
     double total_time_mine_gpu_segmented_full = 0.0;
 
-    for (int experiment = 0; experiment < 10; ++experiment) {
+    double total_lines_opencv_cpu = 0.0;
+    double total_lines_opencv_gpu = 0.0;
+    double total_lines_mine_gpu_basic = 0.0;
+    double total_lines_mine_gpu_segmented = 0.0;
+
+    for (int experiment = 0; experiment < N; ++experiment) {
         cv::Mat img = cv::imread(path, cv::IMREAD_COLOR);  
         if (img.empty()) {
             std::cerr << "Failed to load image: " << path << std::endl;
@@ -379,6 +384,7 @@ int main(int argc, char** argv){
         auto stop_cpu = omp_get_wtime();
         double duration_cpu = stop_cpu - start_cpu;
         total_time_opencv_cpu += duration_cpu;
+        total_lines_opencv_cpu += lines.size();
 
         cv::cuda::GpuMat img_gpu, img_lines_gpu;
         cv::Mat img_lines_cpu;
@@ -394,6 +400,7 @@ int main(int argc, char** argv){
         double duration_gpu_full = stop_gpu - start_gpu_full;
         total_time_opencv_gpu += duration_gpu;
         total_time_opencv_gpu_full += duration_gpu_full;
+        total_lines_opencv_gpu += img_lines_gpu.cols;
 
         unsigned char *d_img = edges.ptr();
         int N = edges.rows;
@@ -402,23 +409,25 @@ int main(int argc, char** argv){
         std::pair<int,line*> result_basic = hough_parallel(d_img, N, threshold, 1, CV_PI/180,&total_time_mine_gpu_basic);
         auto stop_mine_basic = omp_get_wtime();
         total_time_mine_gpu_basic_full += (stop_mine_basic - start_mine_basic);
+        total_lines_mine_gpu_basic += result_basic.first;
         delete[] result_basic.second;
 
         auto start_mine_segmented = omp_get_wtime();
         std::pair<int,line*> result = hough_parallel_segmented(d_img, N, threshold, 1, CV_PI/180,&total_time_mine_gpu_segmented);
         auto stop_mine_segmented = omp_get_wtime();
+        total_lines_mine_gpu_segmented += result.first;
         total_time_mine_gpu_segmented_full += (stop_mine_segmented - start_mine_segmented);
         delete[] result.second;
     }
 
     std::cout << "\n=== AVERAGE TIMES OVER " << N << " EXPERIMENTS ===\n";
-    std::cout << "OpenCV CPU Hough: " << (total_time_opencv_cpu / N)*1000.0 << " ms\n";
-    std::cout << "OpenCV GPU Hough (kernel only): " << (total_time_opencv_gpu / N)*1000.0 << "ms\n";
-    std::cout << "Mine GPU Hough (basic): " << (total_time_mine_gpu_basic / N)*1000.0 << "ms\n";
-    std::cout << "Mine GPU Hough (segmented): " << (total_time_mine_gpu_segmented / N)*1000.0 << "ms\n";
-    std::cout << "OpenCV GPU Hough (full incl. transfer): " << (total_time_opencv_gpu_full / N)*1000.0 << "ms\n";
-    std::cout << "Mine GPU Hough (basic incl. transfer): " << (total_time_mine_gpu_basic_full / N)*1000.0 << "ms\n";
-    std::cout << "Mine GPU Hough (segmented incl. transfer): " << (total_time_mine_gpu_segmented_full / N)*1000.0 << "ms\n";
+    std::cout << "OpenCV CPU Hough: " << (total_time_opencv_cpu / N)*1000.0 << " ms\n" << "Lines found: " << total_lines_opencv_cpu / N << "\n";
+    std::cout << "OpenCV GPU Hough (kernel only): " << (total_time_opencv_gpu / N)*1000.0 << "ms\n" << "Lines found: " << total_lines_opencv_gpu / N << "\n";
+    std::cout << "Mine GPU Hough (basic): " << (total_time_mine_gpu_basic / N)*1000.0 << "ms\n" << "Lines found: " << total_lines_mine_gpu_basic / N << "\n";
+    std::cout << "Mine GPU Hough (segmented): " << (total_time_mine_gpu_segmented / N)*1000.0 << "ms\n" << "Lines found: " << total_lines_mine_gpu_segmented / N << "\n";
+    std::cout << "OpenCV GPU Hough (full incl. transfer): " << (total_time_opencv_gpu_full / N)*1000.0 << "ms\n" << "Lines found: " << total_lines_opencv_gpu / N << "\n";
+    std::cout << "Mine GPU Hough (basic incl. transfer): " << (total_time_mine_gpu_basic_full / N)*1000.0 << "ms\n" << "Lines found: " << total_lines_mine_gpu_basic / N << "\n";
+    std::cout << "Mine GPU Hough (segmented incl. transfer): " << (total_time_mine_gpu_segmented_full / N)*1000.0 << "ms\n" << "Lines found: " << total_lines_mine_gpu_segmented / N << "\n";
 
     return 0;
 }
