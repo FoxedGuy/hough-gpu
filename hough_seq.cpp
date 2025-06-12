@@ -59,8 +59,8 @@ std::vector<std::pair<float,float>> hough_transform(cv::Mat img, int threshold, 
     }
 
     std::vector<std::pair<float,float>> lines;
-    for (int r = 0; r < numrho; ++r) {
-        for (int angle = 0; angle < numangle; ++angle){
+    for (int r = 1; r < numrho; ++r) {
+        for (int angle = 1; angle < numangle; ++angle){
             int ind = (angle+1)*(numrho+2)+r+1;
             if( accu[ind] > threshold &&
                 accu[ind] > accu[ind - 1] && accu[ind] >= accu[ind + 1] &&
@@ -84,10 +84,14 @@ int main(int argc, char** argv) {
     cv::Mat img_dst;
     cv::Mat img_blur;
     cv::Mat img;
+    float duration_cv = 0.0;
+    float duration_mine = 0.0;
+    int num_lines_cv = 0;
+    int num_lines_mine = 0;
     
     int threshold;
-
-    if (argc == 3){
+    int n;
+    if (argc == 4){
         std::string filename = argv[1];
         std::string path = "../pictures/" + filename;
 
@@ -97,6 +101,7 @@ int main(int argc, char** argv) {
             return -1;
         }
         threshold = std::stoi(argv[2]);
+        n = std::stoi(argv[3]);
     }else{
         std::cout << "Usage: " << argv[0] << " <image_filename> <threshold>\n";
         return -1;
@@ -110,54 +115,60 @@ int main(int argc, char** argv) {
     cv::imwrite("../results/edges.jpg", img_edge);
 
     cv::Mat img_edge_cv = img_edge.clone();
-    auto start = omp_get_wtime();
-    auto lines = hough_transform(img_edge,threshold, 1,CV_PI/180);
-    auto stop = omp_get_wtime();
-    auto duration = stop - start;
     
-    printf("mine:\n");
-    printf("1. lines:  %ld \n", lines.size());
-    printf("2. time:  %lf \n", duration);
-    
-    std::vector<cv::Vec2f> lines_cv;
-    
-    start = omp_get_wtime();
-    cv::HoughLines(img_edge_cv, lines_cv, 1, CV_PI/180, threshold);
-    stop = omp_get_wtime();
-    auto duration_cv = stop-start;
+    for (int i = 0; i < n; i++){
 
-    for (const auto& line : lines) {
-        double theta = line.second;
-        double rho = line.first;
-        double a = std::cos(theta);
-        double b = std::sin(theta);
-        double x0 = a * rho;
-        double y0 = b * rho;
-        cv::Point pt1(cvRound(x0 + biggest * (-b)), cvRound(y0 + biggest * (a)));
-        cv::Point pt2(cvRound(x0 - biggest * (-b)), cvRound(y0 - biggest * (a)));
-        cv::line(img_dst, pt1, pt2, cv::Scalar(0, 0, 255), 2, cv::LINE_AA);
-    } 
-    
-    printf("cv:\n");
-    printf("1. lines:  %ld \n", lines_cv.size());
-    printf("2. time:  %lf \n", duration_cv);
+        auto start = omp_get_wtime();
+        auto lines = hough_transform(img_edge,threshold, 1,CV_PI/180);
+        auto stop = omp_get_wtime();
+        duration_mine += stop - start;
+        num_lines_mine += lines.size();
+        
+        std::vector<cv::Vec2f> lines_cv;
+        
+        start = omp_get_wtime();
+        cv::HoughLines(img_edge_cv, lines_cv, 1, CV_PI/180, threshold);
+        stop = omp_get_wtime();
+        duration_cv += stop-start;
+        num_lines_cv += lines_cv.size();
 
-    cv::Mat img_dst2 = img.clone();
-    for( size_t i = 0; i < lines.size(); i++ )
-    {
-        float rho = lines_cv[i][0], theta = lines_cv[i][1];
-        cv::Point pt1, pt2;
-        double a = cos(theta), b = sin(theta);
-        double x0 = a*rho, y0 = b*rho;
-        pt1.x = cvRound(x0 + biggest*(-b));
-        pt1.y = cvRound(y0 + biggest*(a));
-        pt2.x = cvRound(x0 - biggest*(-b));
-        pt2.y = cvRound(y0 - biggest*(a));
-        line( img_dst2, pt1, pt2, cv::Scalar(0,0,255), 2, cv::LINE_AA);
+        if (n == 1){
+            for (const auto& line : lines) {
+                double theta = line.second;
+                double rho = line.first;
+                double a = std::cos(theta);
+                double b = std::sin(theta);
+                double x0 = a * rho;
+                double y0 = b * rho;
+                cv::Point pt1(cvRound(x0 + biggest * (-b)), cvRound(y0 + biggest * (a)));
+                cv::Point pt2(cvRound(x0 - biggest * (-b)), cvRound(y0 - biggest * (a)));
+                cv::line(img_dst, pt1, pt2, cv::Scalar(0, 0, 255), 2, cv::LINE_AA);
+            } 
+        }
+
+        cv::Mat img_dst2 = img.clone();
+        if (n == 1){
+            for( size_t i = 0; i < lines.size(); i++ )
+            {
+                float rho = lines_cv[i][0], theta = lines_cv[i][1];
+                cv::Point pt1, pt2;
+                double a = cos(theta), b = sin(theta);
+                double x0 = a*rho, y0 = b*rho;
+                pt1.x = cvRound(x0 + biggest*(-b));
+                pt1.y = cvRound(y0 + biggest*(a));
+                pt2.x = cvRound(x0 - biggest*(-b));
+                pt2.y = cvRound(y0 - biggest*(a));
+                line( img_dst2, pt1, pt2, cv::Scalar(0,0,255), 2, cv::LINE_AA);
+            }
+            cv::imwrite("../results/lines/cpu/result_mine.png",img_dst);
+            cv::imwrite("../results/lines/cpu/result_cv.png",img_dst2);
+        }
     }
-
-    cv::imwrite("../results/result_mine.png",img_dst);
-    cv::imwrite("../results/result_cv.png",img_dst2);
-
+    printf("mine:\n");
+    printf("1. lines:  %d \n", num_lines_mine/n);
+    printf("2. time:  %lf \n", duration_mine/n);
+    printf("cv:\n");
+    printf("1. lines:  %d \n", num_lines_cv/n);
+    printf("2. time:  %lf \n", duration_cv/n);
     return 0;
 }

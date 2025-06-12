@@ -10,7 +10,6 @@ include_directories( ${OpenCV_INCLUDE_DIRS} )
 
 add_executable(hough_gpu_streams hough_gpu_streams.cu)
 add_executable(hough_seq hough_seq.cpp)
-add_executable(hough_circle_cpu hough_circle_cpu.cpp)
 add_executable(hough_circle_gpu hough_circle_gpu.cu)
 
 target_compile_options(hough_gpu_streams PRIVATE
@@ -23,7 +22,6 @@ target_compile_options(hough_circle_gpu PRIVATE
 )
 
 target_link_libraries(hough_seq ${OpenCV_LIBS} )
-target_link_libraries(hough_circle_cpu ${OpenCV_LIBS} OpenMP::OpenMP_CXX)
 target_link_libraries(hough_circle_gpu ${OpenCV_LIBS} OpenMP::OpenMP_CXX)
 target_link_libraries(hough_gpu_streams ${OpenCV_LIBS} OpenMP::OpenMP_CXX)
 
