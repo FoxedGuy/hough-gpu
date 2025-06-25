@@ -426,7 +426,7 @@ int main(int argc, char** argv){
         cv::Canny(blur, edges, 50, 150, 3);
 
         if (n == 1)
-            cv::imwrite("../results/edges.png", edges);
+            cv::imwrite("../results/lines/gpu/edges.png", edges);
         int biggest = img.rows+img.rows;
 
         std::vector<cv::Vec2f> lines;
@@ -448,7 +448,6 @@ int main(int argc, char** argv){
         img_lines_gpu.download(img_lines_cpu);
         auto stop_gpu = omp_get_wtime();
 
-        // Draw lines from img_lines_cpu
         if (n == 1)
             drawHoughLines(img_lines_cpu, img_dst, biggest); 
 
@@ -477,7 +476,7 @@ int main(int argc, char** argv){
                 double y0 = b * rho;
                 cv::Point pt1(cvRound(x0 + biggest * (-b)), cvRound(y0 + biggest * (a)));
                 cv::Point pt2(cvRound(x0 - biggest * (-b)), cvRound(y0 - biggest * (a)));
-                cv::line(img_dst_mine, pt1, pt2, cv::Scalar(0, 0, 255), 5, cv::LINE_AA);
+                cv::line(img_dst_mine, pt1, pt2, cv::Scalar(0, 0, 255), 9, cv::LINE_AA);
             } 
         }
         

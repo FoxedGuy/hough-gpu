@@ -16,6 +16,11 @@ RUN apt update && apt install -y \
     libomp-dev \
     && apt clean
 
+# Add Nsight tools
+RUN apt update && apt install -y \
+    nsight-compute-2025.2.0 \
+    nsight-systems-2024.6.2
+
 ENV CC=/usr/bin/gcc-11
 ENV CXX=/usr/bin/g++-11
 ENV CUDAHOSTCXX=/usr/bin/g++-11

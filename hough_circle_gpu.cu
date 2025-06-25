@@ -223,7 +223,6 @@ std::vector<circle> hough_circle_cpu(const cv::Mat& img, int height, int width, 
         }
     }
 
-    // CPU-side suppression
     std::vector<circle> final;
     for (size_t i = 0; i < centers.size(); ++i) {
         if (!centers[i].valid) continue;
@@ -263,10 +262,11 @@ int main(int argc, char** argv) {
     }
 
     cv::Mat img_result = img.clone();
+    cv::Mat img_result_gpu = img.clone();
     cv::Mat gray, blur, edges;
     cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
     // cv::GaussianBlur(gray, blur, cv::Size(5, 5), 2, 2);
-    cv::Canny(gray, edges, 50, 150);
+    cv::Canny(gray, edges, 250, 350);
 
     imwrite("../results/circles/gpu/edges.png", edges);
 
@@ -282,16 +282,28 @@ int main(int argc, char** argv) {
         time_gpu += end_gpu - start_gpu;
         circles_found_gpu += circles_gpu.size();
 
-        auto start_cpu = omp_get_wtime();
-        auto circles_cpu = hough_circle_cpu(edges, edges.rows, edges.cols, radius_min, radius_max, threshold);
-        auto end_cpu = omp_get_wtime();
-        time_cpu += end_cpu - start_cpu;
-        circles_found_cpu += circles_cpu.size();
+        // auto start_cpu = omp_get_wtime();
+        // auto circles_cpu = hough_circle_cpu(edges, edges.rows, edges.cols, radius_min, radius_max, threshold);
+        // auto end_cpu = omp_get_wtime();
+        // time_cpu += end_cpu - start_cpu;
+        // circles_found_cpu += circles_cpu.size();
+
+        if (n == 1) {
+            for (const auto& circle : circles_gpu) {
+                cv::circle(img_result_gpu, cv::Point(circle.x, circle.y), circle.r, cv::Scalar(0, 255, 0), 2);
+            }
+            imwrite("../results/circles/gpu/results_gpu.png", img_result_gpu);
+        
+            // for (const auto& circle : circles_cpu) {
+            //     cv::circle(img_result, cv::Point(circle.x, circle.y), circle.r, cv::Scalar(255, 0, 0), 2);
+            // }
+            // imwrite("../results/circles/cpu/results_cpu.png", img_result);
+        }
         
     }
     std::cout << "After " << n << " iterations:\n";
     std::cout << "GPU Time: " << time_gpu / n  << " seconds, Circles Found: " << circles_found_gpu/n << "\n";
-    std::cout << "CPU Time: " << time_cpu / n  << " seconds, Circles Found: " << circles_found_cpu/n << "\n";
+    // std::cout << "CPU Time: " << time_cpu / n  << " seconds, Circles Found: " << circles_found_cpu/n << "\n";
     
     return 0;
 }
