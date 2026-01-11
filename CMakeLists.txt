@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.10)
 set(CMAKE_CUDA_ARCHITECTURES "80")
 project(hough-seq LANGUAGES CXX CUDA)
 
-set(OpenCV_DIR /usr/local/include/opencv4)
+set(OpenCV_DIR ~/cv/opencv/build)
 find_package( OpenCV REQUIRED )
 find_package( CUDAToolkit )
 find_package( OpenMP REQUIRED )
