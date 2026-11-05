@@ -6,6 +6,15 @@
 #include <cmath>
 #include "omp.h"
 
+#define CUDA_CHECK(call) do { \
+    cudaError_t err = (call); \
+    if (err != cudaSuccess) { \
+        fprintf(stderr, "CUDA error: %s (%s:%d)\n", \
+                cudaGetErrorString(err), __FILE__, __LINE__); \
+        std::abort(); \
+    } \
+} while (0)
+
 struct line {
     float rho;
     float theta;
