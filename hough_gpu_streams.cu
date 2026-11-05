@@ -666,7 +666,6 @@ int main(int argc, char** argv) {
     cv::Mat img_lines_cpu;
     img_gpu.upload(edges);
 
-    // Rozgrzewka
     for (int i = 0; i < 5; ++i) {
         if (implementation == "opencv") {
             cv_hough->detect(img_gpu, img_lines_gpu);
@@ -677,7 +676,6 @@ int main(int argc, char** argv) {
 
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    // Pomiar serii
     cudaEvent_t start, stop;
 
     CUDA_CHECK(cudaEventCreate(&start));
@@ -709,131 +707,8 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
     
-    // for (int experiment = 0; experiment < n; ++experiment) {
-    //     cudaEvent_t start_gpu, stop_gpu;
-    //     CUDA_CHECK(cudaEventCreate(&start_gpu));
-    //     CUDA_CHECK(cudaEventCreate(&stop_gpu));
-
-    //     CUDA_CHECK(cudaEventRecord(start_gpu));
-
-    //     cv_hough->detect(img_gpu, img_lines_gpu);
-    //     CUDA_CHECK(cudaEventRecord(stop_gpu));
-    //     CUDA_CHECK(cudaEventSynchronize(stop_gpu));
-        
-
-    //     float duration_gpu = 0.0f;
-    //     CUDA_CHECK(cudaEventElapsedTime(
-    //         &duration_gpu, start_gpu, stop_gpu
-    //     ));
-
-    //     total_time_opencv_gpu += duration_gpu;
-
-    //     CUDA_CHECK(cudaEventDestroy(start_gpu));
-    //     CUDA_CHECK(cudaEventDestroy(stop_gpu));
-
-    //     // if (experiment == 0) {
-    //     //     for (int i = 0; i < img_lines_cpu.cols; ++i) {
-    //     //         float rho =
-    //     //             img_lines_cpu.at<float>(0, i * 2);
-    //     //         float theta =
-    //     //             img_lines_cpu.at<float>(0,
-    //     //                                      i * 2 + 1);
-
-    //     //         double a = std::cos(theta);
-    //     //         double b = std::sin(theta);
-    //     //         double x0 = a * rho;
-    //     //         double y0 = b * rho;
-
-    //     //         cv::Point pt1(
-    //     //             cvRound(x0 + biggest * (-b)),
-    //     //             cvRound(y0 + biggest * (a)));
-    //     //         cv::Point pt2(
-    //     //             cvRound(x0 - biggest * (-b)),
-    //     //             cvRound(y0 - biggest * (a)));
-
-    //     //         cv::line(img_dst,
-    //     //                  pt1,
-    //     //                  pt2,
-    //     //                  cv::Scalar(255, 0, 0),
-    //     //                  1,
-    //     //                  cv::LINE_AA);
-    //     //     }
-    //     // }
-
-    //     cudaEvent_t start, stop;
-
-    //     CUDA_CHECK(cudaEventCreate(&start));
-    //     CUDA_CHECK(cudaEventCreate(&stop));
-
-    //     CUDA_CHECK(cudaEventRecord(start));
-
-    //     hough.execute();
-
-    //     CUDA_CHECK(cudaEventRecord(stop));
-    //     CUDA_CHECK(cudaEventSynchronize(stop));
-
-    //     float milliseconds = 0.0f;
-
-    //     CUDA_CHECK(cudaEventElapsedTime(
-    //         &milliseconds, start, stop
-    //     ));
-
-    //     total_time_mine_gpu_basic += milliseconds;
-
-    //     CUDA_CHECK(cudaEventDestroy(start));
-    //     CUDA_CHECK(cudaEventDestroy(stop));
-
-    //     // if (experiment == 0) {
-    //     //     for (const auto& detected_line : result_basic) {
-    //     //         float theta = detected_line.theta;
-    //     //         float rho = detected_line.rho;
-
-    //     //         double a = std::cos(theta);
-    //     //         double b = std::sin(theta);
-    //     //         double x0 = a * rho;
-    //     //         double y0 = b * rho;
-
-    //     //         cv::Point pt1(
-    //     //             cvRound(x0 + biggest * (-b)),
-    //     //             cvRound(y0 + biggest * (a)));
-    //     //         cv::Point pt2(
-    //     //             cvRound(x0 - biggest * (-b)),
-    //     //             cvRound(y0 - biggest * (a)));
-
-    //     //         cv::line(img_dst_mine,
-    //     //                  pt1,
-    //     //                  pt2,
-    //     //                  cv::Scalar(0, 0, 255),
-    //     //                  1,
-    //     //                  cv::LINE_AA);
-    //     //     }
-    //     // }
-
-    //     // std::string output_path_gpu = "../results/lines/gpu/";
-    //     // std::string output_filename_gpu = "lines_gpu_opencv.png";
-    //     // std::string output_filename_mine_basic = "lines_mine_basic.png";
-
-    //     // cv::imwrite(output_path_gpu + output_filename_gpu, img_dst);
-    //     // cv::imwrite(output_path_gpu + output_filename_mine_basic, img_dst_mine);
-    // }
     img_lines_gpu.download(img_lines_cpu);
     std::vector<line> result_basic = hough.getResults();
-
-    // std::cout << "\n=== RESULTS OVER "
-    //           << n << " EXPERIMENTS ===\n";
-    // std::cout << "CPU: "
-    //           << duration_cpu * 1000.0
-    //           << "ms, "
-    //           << "lines found: "
-    //           << lines.size() << "\n";
-
-    // std::cout << "GPU:"
-    //           << (total_time_mine_gpu_basic / n) 
-    //           << "ms\n";
-
-    // std::cout << "OpenCV: "
-    //           << (total_time_opencv_gpu / n)
-    //           << " ms\n";
 
     return 0;
 }
