@@ -20,6 +20,8 @@ struct line {
     float theta;
 };
 
+
+
 int computeNumangle(double min_theta, double max_theta, double theta_step) {
     int numangle = cvFloor((max_theta - min_theta) / theta_step) + 1;
 
@@ -193,7 +195,7 @@ __global__ void fill_accum(int* accum,
         r += shift;
 
         if (r >= 0 && r < numrho) {
-        atomicAdd(&row[r + 1], 1);
+            atomicAdd(&row[r + 1], 1);
         }    
 
     }
@@ -236,7 +238,7 @@ __global__ void fill_accum_packed(int* accum,
         r += shift;
 
         if (r >= 0 && r < numrho) {
-        atomicAdd(&sh_accum[r + 1], 1);
+            atomicAdd(&sh_accum[r + 1], 1);
         }
     }
 
@@ -335,10 +337,10 @@ private:
 
 HoughTransformGPU::HoughTransformGPU(
     const cv::Mat& image,
-                                     int threshold,
-                                     float rho,
-                                     float theta_step,
-                                     size_t sharedMemPerBlock,
+    int threshold,
+    float rho,
+    float theta_step,
+    size_t sharedMemPerBlock,
     float min_theta,
     float max_theta
 )
@@ -454,7 +456,7 @@ void HoughTransformGPU::execute() {
             theta_step
         );
     }
-    else 
+    else
     {
         fill_accum<<<grid_vote, block_vote>>>(
             d_accum,
@@ -593,14 +595,22 @@ int main(int argc, char** argv) {
 
     std::cout << "Cuda device: " << prop.name << std::endl;
 
-    if (argc < 4) {
-        std::cout << "not enough parametrs" << std::endl;
-        return -1;
+    if (argc < 5) {
+        std::cerr << "Usage: ./hough <image> <threshold> <iterations> <opencv|custom>\n";
+        return 1;
     }
+
+    
 
     std::string filename = argv[1];
     int threshold = std::stoi(argv[2]);
     int n = std::stoi(argv[3]);
+    std::string implementation = argv[4];
+
+    if (implementation != "opencv" && implementation != "custom") {
+        std::cerr << "Invalid implementation\n";
+        return 1;
+    }
 
     std::string path = "../pictures/" + filename;
 
@@ -617,6 +627,18 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    if (edges.rows != edges.cols) {
+    throw std::runtime_error("Image must be square");
+    }
+
+    if (edges.type() != CV_8UC1) {
+        throw std::runtime_error("Image must be 8-bit grayscale");
+    }
+
+    if (!edges.isContinuous()) {
+        edges = edges.clone();
+    }
+
     cv::Mat img_dst = edges.clone();
     cv::cvtColor(edges, img_dst, cv::COLOR_GRAY2BGR);
 
@@ -630,117 +652,188 @@ int main(int argc, char** argv) {
     double duration_cpu = stop_cpu - start_cpu;
 
     int biggest = edges.rows + edges.rows;
+    
+    auto cv_hough = cv::cuda::createHoughLinesDetector(1, CV_PI / 180, threshold);
+    
+    HoughTransformGPU hough(
+        edges,
+        threshold,
+        1.0f,
+        CV_PI / 180,
+        prop.sharedMemPerBlock
+    ); 
+    cv::cuda::GpuMat img_gpu, img_lines_gpu;
+    cv::Mat img_lines_cpu;
+    img_gpu.upload(edges);
 
-    for (int experiment = 0; experiment < n; ++experiment) {
-        cv::cuda::GpuMat img_gpu, img_lines_gpu;
-        cv::Mat img_lines_cpu;
-
-        auto cv_hough = cv::cuda::createHoughLinesDetector(1, CV_PI / 180, threshold);
-
-        auto start_gpu_full = omp_get_wtime();
-        img_gpu.upload(edges);
-
-        auto start_gpu = omp_get_wtime();
-        cv_hough->detect(img_gpu, img_lines_gpu);
-        img_lines_gpu.download(img_lines_cpu);
-        cudaDeviceSynchronize();
-        auto stop_gpu = omp_get_wtime();
-
-        double duration_gpu = stop_gpu - start_gpu;
-        double duration_gpu_full =
-            stop_gpu - start_gpu_full;
-
-        total_time_opencv_gpu += duration_gpu;
-
-        if (experiment == 0) {
-            for (int i = 0; i < img_lines_cpu.cols; ++i) {
-                float rho =
-                    img_lines_cpu.at<float>(0, i * 2);
-                float theta =
-                    img_lines_cpu.at<float>(0,
-                                             i * 2 + 1);
-
-                double a = std::cos(theta);
-                double b = std::sin(theta);
-                double x0 = a * rho;
-                double y0 = b * rho;
-
-                cv::Point pt1(
-                    cvRound(x0 + biggest * (-b)),
-                    cvRound(y0 + biggest * (a)));
-                cv::Point pt2(
-                    cvRound(x0 - biggest * (-b)),
-                    cvRound(y0 - biggest * (a)));
-
-                cv::line(img_dst,
-                         pt1,
-                         pt2,
-                         cv::Scalar(255, 0, 0),
-                         1,
-                         cv::LINE_AA);
-            }
+    // Rozgrzewka
+    for (int i = 0; i < 5; ++i) {
+        if (implementation == "opencv") {
+            cv_hough->detect(img_gpu, img_lines_gpu);
+        } else {
+            hough.execute();
         }
-
-        unsigned char* d_img = edges.ptr();
-        int N = edges.rows;
-
-        std::pair<int, line*> result_basic = hough_parallel(d_img, N, threshold, 1, CV_PI / 180, &total_time_mine_gpu_basic, prop.sharedMemPerBlock);
-
-        if (experiment == 0) {
-            for (int i = 0; i < result_basic.first; ++i) {
-                line line = result_basic.second[i];
-
-                float theta = line.theta;
-                float rho = line.rho;
-
-                double a = std::cos(theta);
-                double b = std::sin(theta);
-                double x0 = a * rho;
-                double y0 = b * rho;
-
-                cv::Point pt1(
-                    cvRound(x0 + biggest * (-b)),
-                    cvRound(y0 + biggest * (a)));
-                cv::Point pt2(
-                    cvRound(x0 - biggest * (-b)),
-                    cvRound(y0 - biggest * (a)));
-
-                cv::line(img_dst_mine,
-                         pt1,
-                         pt2,
-                         cv::Scalar(0, 0, 255),
-                         1,
-                         cv::LINE_AA);
-            }
-        }
-
-        delete[] result_basic.second;
-
-        std::string output_path_gpu = "../results/lines/gpu/";
-        std::string output_filename_gpu = "lines_gpu_opencv.png";
-        std::string output_filename_mine_basic = "lines_mine_basic.png";
-
-        cv::imwrite(output_path_gpu + output_filename_gpu, img_dst);
-        cv::imwrite(output_path_gpu + output_filename_mine_basic, img_dst_mine);
     }
 
-    std::cout << "\n=== RESULTS OVER "
-              << n << " EXPERIMENTS ===\n";
-    std::cout << "CPU: "
-              << duration_cpu * 1000.0
-              << "ms, "
-              << "lines found: "
-              << lines.size() << "\n";
+    CUDA_CHECK(cudaDeviceSynchronize());
 
-    std::cout << "GPU:"
-              << (total_time_mine_gpu_basic / n) 
-              << "ms\n";
+    // Pomiar serii
+    cudaEvent_t start, stop;
 
-    std::cout << "OpenCV: "
-              << (total_time_opencv_gpu / n) * 1000.0
-              << " ms\n";
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
 
+    CUDA_CHECK(cudaEventRecord(start));
+
+    for (int i = 0; i < n; ++i) {
+        if (implementation == "opencv") {
+            cv_hough->detect(img_gpu, img_lines_gpu);
+        } else {
+            hough.execute();
+        }
+    }
+
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
+
+    float total_ms = 0.0f;
+
+    CUDA_CHECK(cudaEventElapsedTime(
+        &total_ms, start, stop
+    ));
+
+    std::cout << "Implementation: " << implementation << "\n";
+    std::cout << "Total time: " << total_ms << " ms\n";
+    std::cout << "Average time: " << total_ms / n << " ms\n";
+
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
     
+    // for (int experiment = 0; experiment < n; ++experiment) {
+    //     cudaEvent_t start_gpu, stop_gpu;
+    //     CUDA_CHECK(cudaEventCreate(&start_gpu));
+    //     CUDA_CHECK(cudaEventCreate(&stop_gpu));
+
+    //     CUDA_CHECK(cudaEventRecord(start_gpu));
+
+    //     cv_hough->detect(img_gpu, img_lines_gpu);
+    //     CUDA_CHECK(cudaEventRecord(stop_gpu));
+    //     CUDA_CHECK(cudaEventSynchronize(stop_gpu));
+        
+
+    //     float duration_gpu = 0.0f;
+    //     CUDA_CHECK(cudaEventElapsedTime(
+    //         &duration_gpu, start_gpu, stop_gpu
+    //     ));
+
+    //     total_time_opencv_gpu += duration_gpu;
+
+    //     CUDA_CHECK(cudaEventDestroy(start_gpu));
+    //     CUDA_CHECK(cudaEventDestroy(stop_gpu));
+
+    //     // if (experiment == 0) {
+    //     //     for (int i = 0; i < img_lines_cpu.cols; ++i) {
+    //     //         float rho =
+    //     //             img_lines_cpu.at<float>(0, i * 2);
+    //     //         float theta =
+    //     //             img_lines_cpu.at<float>(0,
+    //     //                                      i * 2 + 1);
+
+    //     //         double a = std::cos(theta);
+    //     //         double b = std::sin(theta);
+    //     //         double x0 = a * rho;
+    //     //         double y0 = b * rho;
+
+    //     //         cv::Point pt1(
+    //     //             cvRound(x0 + biggest * (-b)),
+    //     //             cvRound(y0 + biggest * (a)));
+    //     //         cv::Point pt2(
+    //     //             cvRound(x0 - biggest * (-b)),
+    //     //             cvRound(y0 - biggest * (a)));
+
+    //     //         cv::line(img_dst,
+    //     //                  pt1,
+    //     //                  pt2,
+    //     //                  cv::Scalar(255, 0, 0),
+    //     //                  1,
+    //     //                  cv::LINE_AA);
+    //     //     }
+    //     // }
+
+    //     cudaEvent_t start, stop;
+
+    //     CUDA_CHECK(cudaEventCreate(&start));
+    //     CUDA_CHECK(cudaEventCreate(&stop));
+
+    //     CUDA_CHECK(cudaEventRecord(start));
+
+    //     hough.execute();
+
+    //     CUDA_CHECK(cudaEventRecord(stop));
+    //     CUDA_CHECK(cudaEventSynchronize(stop));
+
+    //     float milliseconds = 0.0f;
+
+    //     CUDA_CHECK(cudaEventElapsedTime(
+    //         &milliseconds, start, stop
+    //     ));
+
+    //     total_time_mine_gpu_basic += milliseconds;
+
+    //     CUDA_CHECK(cudaEventDestroy(start));
+    //     CUDA_CHECK(cudaEventDestroy(stop));
+
+    //     // if (experiment == 0) {
+    //     //     for (const auto& detected_line : result_basic) {
+    //     //         float theta = detected_line.theta;
+    //     //         float rho = detected_line.rho;
+
+    //     //         double a = std::cos(theta);
+    //     //         double b = std::sin(theta);
+    //     //         double x0 = a * rho;
+    //     //         double y0 = b * rho;
+
+    //     //         cv::Point pt1(
+    //     //             cvRound(x0 + biggest * (-b)),
+    //     //             cvRound(y0 + biggest * (a)));
+    //     //         cv::Point pt2(
+    //     //             cvRound(x0 - biggest * (-b)),
+    //     //             cvRound(y0 - biggest * (a)));
+
+    //     //         cv::line(img_dst_mine,
+    //     //                  pt1,
+    //     //                  pt2,
+    //     //                  cv::Scalar(0, 0, 255),
+    //     //                  1,
+    //     //                  cv::LINE_AA);
+    //     //     }
+    //     // }
+
+    //     // std::string output_path_gpu = "../results/lines/gpu/";
+    //     // std::string output_filename_gpu = "lines_gpu_opencv.png";
+    //     // std::string output_filename_mine_basic = "lines_mine_basic.png";
+
+    //     // cv::imwrite(output_path_gpu + output_filename_gpu, img_dst);
+    //     // cv::imwrite(output_path_gpu + output_filename_mine_basic, img_dst_mine);
+    // }
+    img_lines_gpu.download(img_lines_cpu);
+    std::vector<line> result_basic = hough.getResults();
+
+    // std::cout << "\n=== RESULTS OVER "
+    //           << n << " EXPERIMENTS ===\n";
+    // std::cout << "CPU: "
+    //           << duration_cpu * 1000.0
+    //           << "ms, "
+    //           << "lines found: "
+    //           << lines.size() << "\n";
+
+    // std::cout << "GPU:"
+    //           << (total_time_mine_gpu_basic / n) 
+    //           << "ms\n";
+
+    // std::cout << "OpenCV: "
+    //           << (total_time_opencv_gpu / n)
+    //           << " ms\n";
 
     return 0;
 }
