@@ -192,7 +192,10 @@ __global__ void fill_accum(int* accum,
         int r = __float2int_rn(x * cosv + y * sinv);
         r += shift;
 
+        if (r >= 0 && r < numrho) {
         atomicAdd(&row[r + 1], 1);
+        }    
+
     }
 }
 
@@ -208,7 +211,7 @@ __global__ void fill_accum_packed(int* accum,
 
     int tid = threadIdx.x;
 
-    for (int r = tid; r <= numrho + 2; r += blockDim.x) {
+    for (int r = tid; r < numrho + 2; r += blockDim.x) {
         sh_accum[r] = 0;
     }
 
@@ -232,7 +235,9 @@ __global__ void fill_accum_packed(int* accum,
         int r = __float2int_rn(x * cosv + y * sinv);
         r += shift;
 
+        if (r >= 0 && r < numrho) {
         atomicAdd(&sh_accum[r + 1], 1);
+        }
     }
 
     __syncthreads();
@@ -240,7 +245,7 @@ __global__ void fill_accum_packed(int* accum,
     char* base = (char*)accum;
     int* row = (int*)(base + (angle + 1) * step);
 
-    for (int i = tid; i < numrho + 1; i += blockDim.x)
+    for (int i = tid; i < numrho + 2; i += blockDim.x)
         row[i] = sh_accum[i];
 }
 
