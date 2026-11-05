@@ -2,6 +2,16 @@
 #include "opencv2/imgproc/imgproc.hpp"
 #include <opencv2/cudaimgproc.hpp>
 #include <cuda_runtime.h>
+#include <algorithm>
+#include <nvml.h>
+#include <chrono>
+#include <thread>
+#include <fstream>
+#include <iomanip>
+#include <stdexcept>
+#include <string>
+#include <atomic>
+#include <mutex>
 #include <vector>
 #include <cmath>
 #include "omp.h"
@@ -15,11 +25,200 @@
     } \
 } while (0)
 
+using Clock = std::chrono::steady_clock;
+
+struct PowerSample {
+    Clock::time_point timestamp;
+    double powerWatts;
+};
+
 struct line {
     float rho;
     float theta;
 };
 
+class GPUPowerMonitor {
+public:
+    explicit GPUPowerMonitor(
+        unsigned int deviceIndex = 0,
+        std::chrono::milliseconds interval =
+            std::chrono::milliseconds(50)
+    )
+        : samplingInterval(interval)
+    {
+        if (samplingInterval.count() <= 0) {
+            throw std::invalid_argument(
+                "Sampling interval must be positive"
+            );
+        }
+
+        checkNVML(nvmlInit_v2());
+
+        nvmlReturn_t status =
+            nvmlDeviceGetHandleByIndex_v2(
+                deviceIndex, &device
+            );
+
+        if (status != NVML_SUCCESS) {
+            nvmlShutdown();
+            throw std::runtime_error(
+                std::string("NVML device error: ") +
+                nvmlErrorString(status)
+            );
+        }
+    }
+
+    ~GPUPowerMonitor() noexcept {
+        running.store(false);
+
+        if (worker.joinable()) {
+            worker.join();
+        }
+
+        nvmlShutdown();
+    }
+
+    GPUPowerMonitor(const GPUPowerMonitor&) = delete;
+    GPUPowerMonitor& operator=(const GPUPowerMonitor&) = delete;
+
+    void start() {
+        if (worker.joinable()) {
+            throw std::runtime_error(
+                "Previous monitoring session must be stopped"
+            );
+        }
+
+        samples.clear();
+        lastError = NVML_SUCCESS;
+        running.store(true);
+
+        try {
+            worker = std::thread(
+                &GPUPowerMonitor::monitorLoop, this
+            );
+        } catch (...) {
+            running.store(false);
+            throw;
+        }
+    }
+
+    void stop() {
+        running.store(false);
+
+        if (worker.joinable()) {
+            worker.join();
+        }
+
+        if (lastError != NVML_SUCCESS) {
+            throw std::runtime_error(
+                std::string("NVML sampling error: ") +
+                nvmlErrorString(lastError)
+            );
+        }
+    }
+
+    const std::vector<PowerSample>& getSamples() const {
+        if (worker.joinable()) {
+            throw std::runtime_error(
+                "Stop monitoring before reading samples"
+            );
+        }
+
+        return samples;
+    }
+
+    void saveCSV(const std::string& filename) const {
+        const auto& data = getSamples();
+
+        std::ofstream file(filename);
+
+        if (!file) {
+            throw std::runtime_error(
+                "Cannot open file: " + filename
+            );
+        }
+
+        file << "time_s,power_w\n";
+        file << std::fixed << std::setprecision(9);
+
+        if (data.empty()) {
+            return;
+        }
+
+        const auto first = data.front().timestamp;
+
+        for (const auto& sample : data) {
+            double elapsed =
+                std::chrono::duration<double>(
+                    sample.timestamp - first
+                ).count();
+
+            file << elapsed << ","
+                 << sample.powerWatts << "\n";
+        }
+
+        if (!file) {
+            throw std::runtime_error(
+                "Failed to write CSV: " + filename
+            );
+        }
+    }
+
+private:
+    static void checkNVML(nvmlReturn_t status) {
+        if (status != NVML_SUCCESS) {
+            throw std::runtime_error(
+                std::string("NVML error: ") +
+                nvmlErrorString(status)
+            );
+        }
+    }
+
+    void monitorLoop() {
+        while (running.load()) {
+            unsigned int powerMilliwatts = 0;
+
+            const auto before = Clock::now();
+
+            nvmlReturn_t status =
+                nvmlDeviceGetPowerUsage(
+                    device, &powerMilliwatts
+                );
+
+            const auto after = Clock::now();
+
+            if (status != NVML_SUCCESS) {
+                lastError = status;
+                running.store(false);
+                break;
+            }
+
+            const auto timestamp =
+                before + (after - before) / 2;
+
+            samples.push_back({
+                timestamp,
+                static_cast<double>(
+                    powerMilliwatts
+                ) / 1000.0
+            });
+
+            std::this_thread::sleep_for(
+                samplingInterval
+            );
+        }
+    }
+
+    nvmlDevice_t device{};
+
+    std::chrono::milliseconds samplingInterval;
+
+    std::vector<PowerSample> samples;
+    std::thread worker;
+    std::atomic<bool> running{false};
+
+    nvmlReturn_t lastError = NVML_SUCCESS;
+};
 
 
 int computeNumangle(double min_theta, double max_theta, double theta_step) {
@@ -578,6 +777,63 @@ void drawHoughLines(
     }
 }
 
+double calculateEnergy(
+    const std::vector<PowerSample>& samples,
+    Clock::time_point start,
+    Clock::time_point end
+) {
+    if (samples.size() < 2 ||
+        end <= start ||
+        samples.front().timestamp > start ||
+        samples.back().timestamp < end) {
+        throw std::runtime_error(
+            "Insufficient samples for energy calculation"
+        );
+    }
+
+    double energy = 0.0;
+
+    for (size_t i = 1; i < samples.size(); ++i) {
+        const auto& a = samples[i - 1];
+        const auto& b = samples[i];
+
+        auto left = std::max(a.timestamp, start);
+        auto right = std::min(b.timestamp, end);
+
+        if (right <= left)
+            continue;
+
+        double interval =
+            std::chrono::duration<double>(
+                b.timestamp - a.timestamp
+            ).count();
+
+        if (interval <= 0.0)
+            continue;
+
+        auto interpolate = [&](Clock::time_point t) {
+            double fraction =
+                std::chrono::duration<double>(
+                    t - a.timestamp
+                ).count() / interval;
+
+            return a.powerWatts +
+                fraction * (b.powerWatts - a.powerWatts);
+        };
+
+        double dt =
+            std::chrono::duration<double>(
+                right - left
+            ).count();
+
+        energy += 0.5 *
+            (interpolate(left) + interpolate(right)) *
+            dt;
+    }
+
+    return energy;
+}
+
 int main(int argc, char** argv) {
     int deviceCount;
     cudaGetDeviceCount(&deviceCount);
@@ -665,7 +921,7 @@ int main(int argc, char** argv) {
     cv::cuda::GpuMat img_gpu, img_lines_gpu;
     cv::Mat img_lines_cpu;
     img_gpu.upload(edges);
-
+    
     for (int i = 0; i < 5; ++i) {
         if (implementation == "opencv") {
             cv_hough->detect(img_gpu, img_lines_gpu);
@@ -676,11 +932,19 @@ int main(int argc, char** argv) {
 
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    cudaEvent_t start, stop;
+    GPUPowerMonitor monitor(0);
 
+    cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
 
+    monitor.start();
+
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(300)
+    );
+
+    const auto energyStart = Clock::now();
     CUDA_CHECK(cudaEventRecord(start));
 
     for (int i = 0; i < n; ++i) {
@@ -693,6 +957,47 @@ int main(int argc, char** argv) {
 
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));
+
+    const auto energyEnd = Clock::now();
+
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(300)
+    );
+
+    monitor.stop();
+
+    double energyJ = calculateEnergy(
+        monitor.getSamples(),
+        energyStart,
+        energyEnd
+    );
+
+    double durationS =
+        std::chrono::duration<double>(
+            energyEnd - energyStart
+        ).count();
+
+    std::cout << "Energy: " << energyJ << " J\n";
+    std::cout << "Average GPU power: "
+            << energyJ / durationS << " W\n";
+    std::cout << "Energy per detection: "
+            << energyJ / n << " J\n";
+
+    const auto& samples = monitor.getSamples();
+
+    double start_s = std::chrono::duration<double>(
+        energyStart - samples.front().timestamp
+    ).count();
+
+    double end_s = std::chrono::duration<double>(
+        energyEnd - samples.front().timestamp
+    ).count();
+
+    std::cout << "Energy interval: "
+            << start_s << " - " << end_s
+            << " s\n";
+
+    monitor.saveCSV("power_" + implementation + ".csv");
 
     float total_ms = 0.0f;
 
@@ -707,8 +1012,11 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
     
-    img_lines_gpu.download(img_lines_cpu);
-    std::vector<line> result_basic = hough.getResults();
+    if (implementation == "opencv") {
+        img_lines_gpu.download(img_lines_cpu);
+    } else {
+        std::vector<line> result_basic = hough.getResults();
+    }
 
     return 0;
 }
