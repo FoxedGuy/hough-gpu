@@ -175,7 +175,7 @@ __global__ void fill_accum(int* accum,
     float theta = min_theta + ang * theta_step;
 
     float cosv, sinv;
-    sincosf(theta, &sinv, &cosv);
+    __sincosf(theta, &sinv, &cosv);
     sinv *= irho;
     cosv *= irho;
 
