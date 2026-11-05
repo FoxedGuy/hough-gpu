@@ -284,91 +284,267 @@ __global__ void find_maxims(int* accum,
     lines[index].theta = min_theta + angle * theta_step;
 }
 
-std::pair<int, line*> hough_parallel(unsigned char* d_img,
-                                     int N,
+class HoughTransformGPU {
+public:
+    HoughTransformGPU(
+        const cv::Mat& image,
+        int threshold,
+        float rho,
+        float theta_step,
+        size_t sharedMemPerBlock,
+        float min_theta = 0.0f,
+        float max_theta = CV_PI
+    );
+
+    ~HoughTransformGPU();
+
+    HoughTransformGPU(const HoughTransformGPU&) = delete;
+    HoughTransformGPU& operator=(const HoughTransformGPU&) = delete;
+
+    void execute();
+
+    std::vector<line> getResults();
+
+private:
+    void allocateMemory();
+    void uploadImage(const cv::Mat& image);
+    void reset();
+
+    int N;
+    int threshold;
+    int numrho;
+    int numangle;
+
+    float rho;
+    float irho;
+    float theta_step;
+    float min_theta;
+
+    size_t sharedMemPerBlock;
+    size_t accu_pitch = 0;
+
+    unsigned char* d_input = nullptr;
+    unsigned int* d_packed_coords = nullptr;
+    int* d_count = nullptr;
+
+    int* d_accum = nullptr;
+
+    line* d_lines = nullptr;
+    int* d_counter = nullptr;
+};
+
+HoughTransformGPU::HoughTransformGPU(
+    const cv::Mat& image,
                                      int threshold,
                                      float rho,
                                      float theta_step,
-                                     double* duration,
                                      size_t sharedMemPerBlock,
-                                     float min_theta = 0.0,
-                                     float max_theta = CV_PI) {
-    unsigned char* input;
-    cudaMalloc(&input, N * N);
-    cudaMemcpy(input, d_img, N * N, cudaMemcpyHostToDevice);
+    float min_theta,
+    float max_theta
+)
+    : N(image.rows),
+      threshold(threshold),
+      rho(rho),
+      irho(1.0f / rho),
+      theta_step(theta_step),
+      min_theta(min_theta),
+      sharedMemPerBlock(sharedMemPerBlock)
+{
+    if (image.empty() ||
+        image.rows != image.cols ||
+        image.type() != CV_8UC1 ||
+        !image.isContinuous()) {
+        throw std::invalid_argument("Invalid input image");
+    }
 
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    if (N > 65536 || rho <= 0.0f ||
+        theta_step <= 0.0f || max_theta <= min_theta) {
+        throw std::invalid_argument("Invalid Hough parameters");
+    }
 
-    cudaEventRecord(start);
+    numangle = computeNumangle(
+        min_theta, max_theta, theta_step
+    );
 
-    const float irho = 1.f / rho;
     const int max_rho = N + N;
-    const int numangle = cvRound(CV_PI / theta_step);
-    const int numrho = cvRound(((max_rho * 2 + 1)) / rho);
+    numrho = cvRound((max_rho * 2 + 1) * irho);
+    
+    allocateMemory();
+    uploadImage(image);
+}
 
-    unsigned int* d_packed_coords;
-    int* d_count;
+void HoughTransformGPU::allocateMemory() {
+    const size_t image_size =
+        static_cast<size_t>(N) * N;
 
-    cudaMalloc(&d_packed_coords, N * N * sizeof(unsigned int));
-    cudaMalloc(&d_count, sizeof(int));
-    cudaMemset(d_count, 0, sizeof(int));
+    const size_t max_lines =
+        static_cast<size_t>(numangle) * numrho;
 
-    dim3 blockDim(16, 16);
-    dim3 gridDim((N + 15) / 16, (N + 15) / 16);
-    extract_non_zero_packed<<<gridDim, blockDim>>>(input, d_packed_coords, d_count, N);
+    CUDA_CHECK(cudaMalloc(&d_input, image_size));
 
-    int* accum;
-    size_t accu_pitch;
-    cudaMallocPitch(&accum, &accu_pitch, (numrho + 2) * sizeof(int), numangle + 2);
+    CUDA_CHECK(cudaMalloc(
+        &d_packed_coords,
+        image_size * sizeof(unsigned int)
+    ));
 
-    cudaMemset2D(accum, accu_pitch, 0, (numrho + 2) * sizeof(int), numangle + 2);
+    CUDA_CHECK(cudaMalloc(&d_count, sizeof(int)));
 
-    dim3 block(1024);
-    dim3 grid(numangle - 2);
-    size_t smemSize = (numrho - 1) * sizeof(int);
+    CUDA_CHECK(cudaMallocPitch(
+        &d_accum,
+        &accu_pitch,
+        (numrho + 2) * sizeof(int),
+        numangle + 2
+    ));
 
-    if (smemSize < sharedMemPerBlock - 1000) 
-        fill_accum_packed<<<grid, block, smemSize>>>(accum, accu_pitch, d_packed_coords, d_count, numrho, irho, min_theta, theta_step);
+    CUDA_CHECK(cudaMalloc(
+        &d_lines,
+        max_lines * sizeof(line)
+    ));
+
+    CUDA_CHECK(cudaMalloc(&d_counter, sizeof(int)));
+}
+
+void HoughTransformGPU::uploadImage(const cv::Mat& image) {
+    const size_t image_size =
+        static_cast<size_t>(N) * N;
+
+    CUDA_CHECK(cudaMemcpy(
+        d_input,
+        image.ptr<unsigned char>(),
+        image_size,
+        cudaMemcpyHostToDevice
+    ));
+}
+
+void HoughTransformGPU::execute() {
+    reset();
+
+    dim3 block_extract(16, 16);
+    dim3 grid_extract(
+        (N + 15) / 16,
+        (N + 15) / 16
+    );
+
+    extract_non_zero_packed<<<grid_extract, block_extract>>>(
+        d_input,
+        d_packed_coords,
+        d_count,
+        N
+    );
+
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    dim3 block_vote(1024);
+    dim3 grid_vote(numangle);
+
+    size_t smemSize = (numrho + 2) * sizeof(int);
+
+    if (sharedMemPerBlock > 1000 &&
+        smemSize < sharedMemPerBlock - 1000)
+    {
+        fill_accum_packed<<<grid_vote, block_vote, smemSize>>>(
+            d_accum,
+            accu_pitch,
+            d_packed_coords,
+            d_count,
+            numrho,
+            irho,
+            min_theta,
+            theta_step
+        );
+    }
     else 
-        fill_accum<<<grid, block>>>(accum, accu_pitch, d_packed_coords, d_count, numrho, irho, min_theta, theta_step);
+    {
+        fill_accum<<<grid_vote, block_vote>>>(
+            d_accum,
+            accu_pitch,
+            d_packed_coords,
+            d_count,
+            numrho,
+            irho,
+            min_theta,
+            theta_step
+        );
+    }
 
-    line* d_lines;
-    int* d_counter;
-    int counter = 0;
-
-    cudaMalloc(&d_lines, 4096 * sizeof(line));
-    cudaMalloc(&d_counter, sizeof(int));
-    cudaMemset(d_counter, 0, sizeof(int));
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     dim3 block_max(16, 16);
-    dim3 grid_max((numrho + 15) / 16,
-                  (numangle + 15) / 16);
+    dim3 grid_max(
+        (numrho + 15) / 16,
+        (numangle + 15) / 16
+    );
 
-    find_maxims<<<grid_max, block_max>>>(accum, accu_pitch, numangle, numrho, threshold, min_theta, theta_step, rho, d_lines, d_counter);
+    find_maxims<<<grid_max, block_max>>>(
+        d_accum,
+        accu_pitch,
+        numangle,
+        numrho,
+        threshold,
+        min_theta,
+        theta_step,
+        rho,
+        d_lines,
+        d_counter
+    );
 
-    cudaMemcpy(&counter, d_counter, sizeof(int), cudaMemcpyDeviceToHost);
-    line* result = (line*)malloc(counter * sizeof(line));
-    cudaMemcpy(result, d_lines, counter * sizeof(line), cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+}
 
-    cudaEventRecord(stop);
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
+void HoughTransformGPU::reset() {
+    CUDA_CHECK(cudaMemset(d_count, 0, sizeof(int)));
+    CUDA_CHECK(cudaMemset(d_counter, 0, sizeof(int)));
 
-    float milliseconds = 0.0f;
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    if (duration)
-        *duration += milliseconds;
+    CUDA_CHECK(cudaMemset2D(
+        d_accum,
+        accu_pitch,
+        0,
+        (numrho + 2) * sizeof(int),
+        numangle + 2
+    ));
+}
 
-    cudaFree(input);
-    cudaFree(accum);
-    cudaFree(d_lines);
-    cudaFree(d_counter);
+std::vector<line> HoughTransformGPU::getResults() {
+    int count = 0;
+
+    CUDA_CHECK(cudaMemcpy(
+        &count,
+        d_counter,
+        sizeof(int),
+        cudaMemcpyDeviceToHost
+    ));
+
+    const size_t max_lines =
+        static_cast<size_t>(numangle) * numrho;
+
+    if (count < 0 || static_cast<size_t>(count) > max_lines) {
+        throw std::runtime_error("Invalid number of detected lines");
+    }
+
+    std::vector<line> results(count);
+
+    if (count > 0) {
+        CUDA_CHECK(cudaMemcpy(
+            results.data(),
+            d_lines,
+            static_cast<size_t>(count) * sizeof(line),
+            cudaMemcpyDeviceToHost
+        ));
+    }
+
+    return results;
+}
+
+HoughTransformGPU::~HoughTransformGPU() {
+    cudaFree(d_input);
     cudaFree(d_packed_coords);
     cudaFree(d_count);
-
-    return {counter, result};
+    cudaFree(d_accum);
+    cudaFree(d_lines);
+    cudaFree(d_counter);
 }
 
 void drawHoughLines(
