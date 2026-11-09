@@ -978,8 +978,8 @@ int main(int argc, char** argv) {
         ).count();
 
     std::cout << "Energy: " << energyJ << " J\n";
-    std::cout << "Average GPU power: "
-            << energyJ / durationS << " W\n";
+    // std::cout << "Average GPU power: "
+    //         << energyJ / durationS << " W\n";
     std::cout << "Energy per detection: "
             << energyJ / n << " J\n";
 
@@ -1008,6 +1008,24 @@ int main(int argc, char** argv) {
     std::cout << "Implementation: " << implementation << "\n";
     std::cout << "Total time: " << total_ms << " ms\n";
     std::cout << "Average time: " << total_ms / n << " ms\n";
+
+    double avgTimeS = durationS / n;
+
+    double throughput = n / durationS;
+
+    double energyPerImage = energyJ / n;
+
+    double avgPower = energyJ / durationS;
+
+    double edp = energyPerImage * avgTimeS;
+
+    double energyEfficiency = n / energyJ;
+
+    std::cout << "Throughput: " << throughput << " images/s\n";
+    std::cout << "Energy per image: " << energyPerImage << " J\n";
+    std::cout << "Average power: " << avgPower << " W\n";
+    std::cout << "EDP per image: " << edp << " J*s\n";
+    std::cout << "Energy efficiency: " << energyEfficiency << " images/J\n";
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
