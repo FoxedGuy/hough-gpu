@@ -493,8 +493,9 @@ public:
         float rho,
         float theta_step,
         size_t sharedMemPerBlock,
-        float min_theta = 0.0f,
-        float max_theta = CV_PI
+        float min_theta,
+        float max_theta,
+        int blockSize
     );
 
     ~HoughTransformGPU();
@@ -515,6 +516,7 @@ private:
     int threshold;
     int numrho;
     int numangle;
+    int blockSize;
 
     float rho;
     float irho;
@@ -541,7 +543,8 @@ HoughTransformGPU::HoughTransformGPU(
     float theta_step,
     size_t sharedMemPerBlock,
     float min_theta,
-    float max_theta
+    float max_theta,
+    int blockSize
 )
     : N(image.rows),
       threshold(threshold),
@@ -549,7 +552,8 @@ HoughTransformGPU::HoughTransformGPU(
       irho(1.0f / rho),
       theta_step(theta_step),
       min_theta(min_theta),
-      sharedMemPerBlock(sharedMemPerBlock)
+      sharedMemPerBlock(sharedMemPerBlock),
+      blockSize(blockSize)
 {
     if (image.empty() ||
         image.rows != image.cols ||
@@ -636,7 +640,7 @@ void HoughTransformGPU::execute() {
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    dim3 block_vote(1024);
+    dim3 block_vote(blockSize);
     dim3 grid_vote(numangle);
 
     size_t smemSize = (numrho + 2) * sizeof(int);
@@ -856,7 +860,14 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    
+    int blockSize = (argc >= 6) ? std::stoi(argv[5]) : 1024;
+
+    if (blockSize != 128 &&
+        blockSize != 256 &&
+        blockSize != 512 &&
+        blockSize != 1024) {
+        throw std::invalid_argument("Invalid block size");
+    }
 
     std::string filename = argv[1];
     int threshold = std::stoi(argv[2]);
@@ -916,8 +927,12 @@ int main(int argc, char** argv) {
         threshold,
         1.0f,
         CV_PI / 180,
-        prop.sharedMemPerBlock
-    ); 
+        prop.sharedMemPerBlock,
+        0.0f,
+        CV_PI,
+        blockSize
+    );
+
     cv::cuda::GpuMat img_gpu, img_lines_gpu;
     cv::Mat img_lines_cpu;
     img_gpu.upload(edges);
